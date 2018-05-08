@@ -4,7 +4,59 @@ from dbmanager import SqlManager
 
 __version__ = '1.1.0'
 
-class Item:
+class Item():
+    """
+        DB에서 ITem을 가져오기 위한 최소한의 구분 정보를 담은 class
+    """
+    def __init__(self, item_set=None, expr=None, **kwargs):
+        self.item_set = set()
+        self.expr = ''
+
+
+        else item_set is None or expr is None:
+            print(kwargs)
+            self._set_attr(**kwargs)
+
+    def _set_attr(self, **kw):
+        assert 'class_nm' in kw.keys()
+        assert 'item_nm' in kw.keys()
+        self.item_set.add('{}::{}'.format(kw['class_nm'], kw['item_nm']))
+        self.expr = '[{}]'.format(kw['item_nm'])
+
+    def __add__(self, other):
+        return_item = Item()
+        return_item.item_set = self.item_set | other.item_set
+        return_item.expr = '(' + self.expr + '+' + other.expr + ')'
+
+        return return_item
+
+    def __sub__(self, other):
+        return_item = Item()
+        return_item.item_set = self.item_set | other.item_set
+        return_item.expr = '(' + self.expr + '-' + other.expr + ')'
+
+        return return_item
+
+    def __mul__(self, other):
+        return_item = Item()
+        return_item.item_set = self.item_set | other.item_set
+        return_item.expr = '(' + self.expr + '*' + other.expr + ')'
+
+        return return_item
+
+    def __truediv__(self, other):
+        return_item = Item()
+        return_item.item_set = self.item_set | other.item_set
+        return_item.expr = '(' + self.expr + '/ nullif(' + other.expr + ',0))'
+
+        return return_item
+
+    def __repr__(self):
+        return_str = 'item string: {} \nexpression: {}\n'.format(self.item_set, self.expr)
+        return return_str
+
+
+class Item_old:
     """
         DB에서 ITem을 가져오기 위한 최소한의 구분 정보를 담은 class
     """
