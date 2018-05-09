@@ -1,19 +1,29 @@
 import settings
-import socket
 from dbmanager import SqlManager
 
+
 __version__ = '1.1.0'
+
 
 class Helper:
     @staticmethod
     def encode(obj):
-        encoded_str = ""
-        encoded_str += str(obj.__dict__)
-        return encoded_str
+        return {'data': obj.__dict__, 'cls': obj.__class__.__name__}
 
     @staticmethod
-    def decode(cls, obj_str):
-        obj_dict = eval(obj_str)
+    def bulk_encode(**kwargs):
+        encoded_dict = dict()
+        for key in kwargs.keys():
+            if isinstance(kwargs[key], dict):
+                encoded_dict[key] = Helper.bulk_encode(**kwargs[key])
+                continue
+            encoded_dict[key] = Helper.encode(kwargs[key])
+        return encoded_dict
+
+    @staticmethod
+    def decode(obj_str_dict):
+        cls = obj_str_dict['cls']
+        obj_dict = obj_str_dict['data']
         if cls.lower() in ['item']:
             obj = Item(**obj_dict)
         elif cls.lower() in ['univ', 'universe']:
@@ -25,6 +35,20 @@ class Helper:
                            type_=obj_dict['type_'],
                            **eval(obj_dict['desc_']))
         return obj
+
+    @staticmethod
+    def bulk_decode(**kwargs):
+        decoded_dict = dict()
+        for key in kwargs.keys():
+            if 'data' not in kwargs[key].keys():
+                decoded_dict[key] = Helper.bulk_decode(**kwargs[key])
+                continue
+
+            decoded_dict[key] = Helper.decode(kwargs[key])
+
+        return decoded_dict
+
+
 
 class ItemDefault:
     def __init__(self, item_cls=None, item_nm=None):
@@ -235,135 +259,6 @@ class Equity:
         return return_str
 
 
-class PipeInfo:
-    """
-        Pipeline을 통해 DB의 데이터를 가져오기 위한 필요 데이터관련 정보
-        universe, characteristics, ...
-    """
-
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def addattr(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def __repr__(self):
-        return_str = ""
-        for key in self.__dict__.keys():
-            return_str += "{}  ".format(key)
-        return_str += '\n'
-
-        return return_str
-
-
-# pipe = Pipeline()
-# factor_obj = Factor() ?!
-# pipe.add_pipeline('pipe_equity', universe=univ.univ_dict['equity'], item=item_obj)
-class Pipeline:
-    """
-        받고자 하는 데이터를 abstract 수준으로 받아서 pipeline별로 add_pipeline을 통해 추가
-        run_pipeline을 통해 실제로 DB연결을 통해 데이터를 한꺼번에 받아오기
-
-        pipeline은 dictionary로 관리되며 key는 pipeline의 이름, value는 DataInfo타입의 class object로 저장   
-
-        pipeline class object 자체는 하나만 생성하되, 목적별로 다른 데이터를 pipeline name으로 구별
-        run_pipeline도 name별로 그떄그때 가져오는 방식
-    """
-
-    def __init__(self):
-        self.pipeline = dict()
-
-    def add_pipeline(self, name, **kwargs):
-        self.pipeline[name] = PipeInfo(**kwargs)
-        my_ip = socket.gethostbyname(socket.gethostname())
-        if my_ip in settings.ip_class.keys():
-            table_id = name + '_' + settings.ip_class[my_ip]
-        else:
-            table_id = name + '_' + 'unknown'
-        self.pipeline[name].addattr(table_id=table_id)
-
-    def run_pipeline(self, name, schedule):
-        sqlm = SqlManager()
-        sqlm.set_db_name('qpipe')
-
-        mypipe = self.pipeline[name]
-        assert hasattr(mypipe, 'universe')
-        assert hasattr(mypipe, 'item')
-
-
-        sqlm.db_execute("""
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME=N'{table_id}')
-        BEGIN
-        create table {table_id} (item_nm varchar(40), infocode int, eval_d date, value_ float
-        primary key(item_nm, infocode, eval_d)
-        )
-        END
-        ELSE BEGIN
-        truncate table {table_id}
-        END
-        """.format(table_id=mypipe.table_id))
-
-
-        univ_str = '&'.join(mypipe.universe)
-        schedule_str = schedule.code.replace("'", "''")
-
-        for item_key in mypipe.item.keys():
-            item_str = '&'.join(mypipe.item[item_key].item_set)
-            item_expr = mypipe.item[item_key].expr
-
-            sql_code = sqlm.db_read("select qinv.dbo.FS_CodeAssembler('{}', '{}', '{}', '{}')".format(
-                univ_str, item_str, item_expr, schedule_str))
-            sql_code = sql_code.values[0][0]
-
-            # return_dict[item_key] = sqlm.db_execute(sql_code)
-
-            mypipe.addattr(sql_code=sql_code)
-            sqlm.db_execute("""insert into {} \n{}""".format(mypipe.table_id, sql_code.replace('[item_nm]', item_key)))
-
-    def get_code(self, name, schedule):
-        sqlm = SqlManager()
-        sqlm.set_db_name('qinv')
-        mypipe = self.pipeline[name]
-        univ_str = '&'.join(mypipe.universe)
-        schedule_str = schedule.code.replace("'", "''")
-
-        code_list = dict()
-        for item_key in mypipe.item.keys():
-            item_str = '&'.join(mypipe.item[item_key].item_set)
-            item_expr = mypipe.item[item_key].expr
-
-            sql_code = sqlm.db_read("select qinv.dbo.FS_CodeAssembler('{}', '{}', '{}', '{}')".format(
-                univ_str, item_str, item_expr, schedule_str))
-            sql_code = sql_code.values[0][0]
-            code_list[item_key] = sql_code
-        return code_list
-
-    def get_item(self, name, item_id):
-        sqlm = SqlManager()
-        sqlm.set_db_name('qpipe')
-
-        table_id = self.pipeline[name].table_id
-        if item_id not in self.pipeline[name].item.keys():
-            print('No such item exists')
-            return None
-
-        item_data = sqlm.db_read("select * from {} where item_nm='{}'".format(table_id, item_id))
-        return item_data
-
-    def __getitem__(self, name):
-        return self.pipeline[name]
-
-    def __repr__(self):
-        return_str = "[[[ pipe name : attributes ]]]\n"
-        for name in self.pipeline.keys():
-            return_str += "{} : ".format(name)
-            return_str += self.pipeline[name].__repr__()
-
-        return return_str
-
-
 # univ = Universe()
 # univ.add_univ('equity', 'us_all')
 # univ.add_univ('equity', 'kr_all')
@@ -405,71 +300,4 @@ class Universe:
             return_str += "asset class: {}\n  - univ_nm: {}\n\n".format(key, ", ".join(self.univ_dict[key]))
 
         return return_str
-
-
-
-
-
-# def get_data_from_tablename(source_name, module_name=None, **kwargs):
-#     if module_name is None:
-#         module_name = datasource
-#
-#     try:
-#         return getattr(module_name, source_name)(**kwargs)
-#     except ImportError:
-#         print('GBI MODULE ERROR: You have not imported the {} module.'.format(module_name))
-#         exit()
-
-
-# class SuriData:
-#     def __init__(self, information=None, manual=False):
-#         if information is None:
-#             print('SURIDATA: No information to initialize.')
-#             self.univ_cd = None
-#             self.stock_df = None
-#             self.suri_search = None
-#             self.suri_wgt = None
-#             self.bond_df = None
-#             self.discount_rate = None
-#             self.spot_curve = None
-#             self.goal_beta_matrix = None
-#             self.proj_dir = None
-#             self.rates = None
-#         else:
-#             if manual is False:
-#                 self.set_suri_data(information)
-#             else:
-#                 self.set_suri_data_by_manual(information)
-#
-#     def set_suri_data(self, information):
-#         self.proj_dir = information['proj_dir']
-#         self.univ_cd = information['univ_cd']
-#         self.stock_df = get_data_from_tablename(information['asset_data'], stock_list=information['stock_list'])
-#         self.suri_search, self.suri_wgt = get_data_from_tablename(information['suri_data'],
-#                                                                   univ_cd=information['univ_cd'])
-#         self.spot_curve = read_txt(information['spot_curve'], information['proj_dir'])
-#         self.bond_df, self.discount_rate = get_data_from_tablename(information['bond_model'],
-#                                                                    module_name=sys.modules[__name__]
-#                                                                    , spot_df=self.spot_curve,
-#                                                                    bond_info=information['bond_info'],
-#                                                                    year=information['year'])
-#         self.goal_beta_matrix = get_data_from_tablename(information['goal_beta_matrix'],
-#                                                         module_name=sys.modules[__name__]
-#                                                         , spot_df=self.spot_curve, year=information['year'],
-#                                                         infl_r=information['infl_r'])
-#         self.rates = get_data_from_tablename(information['rates'])
-#
-#     def set_suri_data_by_manual(self):
-#         print('[SuriData][set_suri_data_by_manual] 여기에 DIY 코딩하시면 됩니다.')
-#
-#     def __repr__(self):
-#         return_str = ""
-#         return_str += "UNIV_CD:{}\n".format(self.univ_cd)
-#         return_str += "Data List: " + ", ".join(self.__dict__.keys())
-#         return_str += "\n"
-#         return_str += "stock_df:\n{}\n".format(self.stock_df.head(3))
-#         return_str += "bond_df:\n{}\n".format(self.bond_df.head(3))
-#         return_str += "suri_search:\n{}\n".format(self.suri_search.head(3))
-#         return_str += "suri_wgt:\n{}\n".format(self.suri_wgt.head(3))
-#         return return_str
 
