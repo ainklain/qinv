@@ -4,67 +4,34 @@ from dbmanager import SqlManager
 
 __version__ = '1.1.0'
 
-class Item():
-    """
-        DB에서 ITem을 가져오기 위한 최소한의 구분 정보를 담은 class
-    """
-    def __init__(self, item_set=None, expr=None, **kwargs):
+class Helper:
+    @staticmethod
+    def encode(obj):
+        encoded_str = ""
+        encoded_str += str(obj.__dict__)
+        return encoded_str
+
+    @staticmethod
+    def decode(cls, obj_str):
+        obj_dict = eval(obj_str)
+        if cls.lower() in ['item']:
+            obj = Item(**obj_dict)
+        elif cls.lower() in ['univ', 'universe']:
+            obj = Universe()
+            obj.univ_dict = obj_dict['univ_dict']
+        elif cls.lower() in ['sch', 'schedule']:
+            obj = Schedule(begin_d=obj_dict['begin_d'],
+                           end_d=obj_dict['end_d'],
+                           type_=obj_dict['type_'],
+                           **eval(obj_dict['desc_']))
+        return obj
+
+class ItemDefault:
+    def __init__(self, item_cls=None, item_nm=None):
         self.item_set = set()
         self.expr = ''
-
-
-        else item_set is None or expr is None:
-            print(kwargs)
-            self._set_attr(**kwargs)
-
-    def _set_attr(self, **kw):
-        assert 'class_nm' in kw.keys()
-        assert 'item_nm' in kw.keys()
-        self.item_set.add('{}::{}'.format(kw['class_nm'], kw['item_nm']))
-        self.expr = '[{}]'.format(kw['item_nm'])
-
-    def __add__(self, other):
-        return_item = Item()
-        return_item.item_set = self.item_set | other.item_set
-        return_item.expr = '(' + self.expr + '+' + other.expr + ')'
-
-        return return_item
-
-    def __sub__(self, other):
-        return_item = Item()
-        return_item.item_set = self.item_set | other.item_set
-        return_item.expr = '(' + self.expr + '-' + other.expr + ')'
-
-        return return_item
-
-    def __mul__(self, other):
-        return_item = Item()
-        return_item.item_set = self.item_set | other.item_set
-        return_item.expr = '(' + self.expr + '*' + other.expr + ')'
-
-        return return_item
-
-    def __truediv__(self, other):
-        return_item = Item()
-        return_item.item_set = self.item_set | other.item_set
-        return_item.expr = '(' + self.expr + '/ nullif(' + other.expr + ',0))'
-
-        return return_item
-
-    def __repr__(self):
-        return_str = 'item string: {} \nexpression: {}\n'.format(self.item_set, self.expr)
-        return return_str
-
-
-class Item_old:
-    """
-        DB에서 ITem을 가져오기 위한 최소한의 구분 정보를 담은 class
-    """
-    def __init__(self, class_nm=None, item_nm=None):
-        self.item_set = set()
-        self.expr = ''
-        if class_nm is not None:
-            self.item_set.add('{}::{}'.format(class_nm, item_nm))
+        if item_cls is not None:
+            self.item_set.add('{}::{}'.format(item_cls, item_nm))
             self.expr = '[{}]'.format(item_nm)
 
     def __add__(self, other):
@@ -100,6 +67,22 @@ class Item_old:
         return return_str
 
 
+class Item(ItemDefault):
+    """
+        DB에서 ITem을 가져오기 위한 최소한의 구분 정보를 담은 class
+    """
+    def __init__(self, item_cls=None, item_nm=None, **kwargs):
+        super().__init__(item_cls, item_nm)
+        self._set_attr(**kwargs)
+
+    def _set_attr(self, **kwargs):
+        item_set = kwargs.get('item_set')
+        expr = kwargs.get('expr')
+        if item_set is not None and expr is not None:
+            self.item_set = item_set
+            self.expr = expr
+
+
 # sch = Schedule('2017-01-01','2017-03-01',type_='end',freq_='m')
 # sch = Schedule('2017-01-01','2017-03-01',type_='spec',days=[2, 6, 7])
 class Schedule:
@@ -120,12 +103,6 @@ class Schedule:
         self.end_d = end_d
         self.type_ = type_
         self.set_schedule(**kwargs)
-
-    def _attr_set(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-        self._gen_code()
 
     def _gen_code(self, freq_=None, interval=None, days=None, months=None):
         sqlm = SqlManager()
@@ -179,20 +156,20 @@ class Schedule:
         if self.type_ in ('end', 'start'):
             assert 'freq_' in key_list
             self.code = self._gen_code(freq_=kwargs['freq_'])
-            self.desc_ = 'freq_: {}'.format(kwargs['freq_'])
+            self.desc_ = "{{'freq_': '{}'}}".format(kwargs['freq_'])
         elif self.type_ == 'spec':
             assert 'days' in key_list
             if 'months' in key_list:
                 self.code = self._gen_code(days=kwargs['days'], months=kwargs['months'])
-                self.desc_ = 'days: {} // months: {}'.format(kwargs['days'], kwargs['months'])
+                self.desc_ = "{{'days': {}, 'months': {} }}".format(kwargs['days'], kwargs['months'])
             else:
                 self.code = self._gen_code(days=kwargs['days'])
-                self.desc_ = 'days: {}'.format(kwargs['days'])
+                self.desc_ = "{{'days': {}}}".format(kwargs['days'])
         elif self.type_ == 'interval':
             assert 'freq_' in key_list
             assert 'interval' in key_list
             self.code = self._gen_code(freq_=kwargs['freq_'], interval=kwargs['interval'])
-            self.desc_ = 'freq_: {} // interval: {}'.format(kwargs['freq_'], kwargs['interval'])
+            self.desc_ = "{{'freq_': '{}', 'interval': {}}}".format(kwargs['freq_'], kwargs['interval'])
         else:
             pass
 
@@ -258,7 +235,7 @@ class Equity:
         return return_str
 
 
-class DataInfo:
+class PipeInfo:
     """
         Pipeline을 통해 DB의 데이터를 가져오기 위한 필요 데이터관련 정보
         universe, characteristics, ...
@@ -299,7 +276,7 @@ class Pipeline:
         self.pipeline = dict()
 
     def add_pipeline(self, name, **kwargs):
-        self.pipeline[name] = DataInfo(**kwargs)
+        self.pipeline[name] = PipeInfo(**kwargs)
         my_ip = socket.gethostbyname(socket.gethostname())
         if my_ip in settings.ip_class.keys():
             table_id = name + '_' + settings.ip_class[my_ip]
