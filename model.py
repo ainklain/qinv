@@ -1,6 +1,12 @@
 import pandas as pd
 import numpy as np
+import time
+import socket
+import settings
+from dbmanager import SqlManager
 
+from datasource import Equity, Schedule, Universe
+from pipeline import Pipeline
 __version__ = '1.0.0'
 
 class Model:
@@ -27,7 +33,7 @@ class Model:
             self.data.loc[self.data['value_'] > winsorize, 'value_'] = winsorize 
             self.data.loc[self.data['value_'] < -winsorize, 'value_'] = -winsorize
 
-    def make_order_signal(self, q=0.3, weight='equal', long_short='LS', reverse=False, min_n_of_stocks=10):
+    def make_order_table(self, q=0.3, weight='equal', long_short='LS', reverse=False, min_n_of_stocks=10, **kw):
         if q >= 1:
             q = 1.
         elif q <= 0:
@@ -87,29 +93,68 @@ class Model:
         return wgt_table
 
 
+
+class ModelDefault:
+    def __init__(self, univ=None, sch=None, **kwargs):
+        if univ is None:
+            self.univ = Universe(**{'equity': ['kr_all']})
+        else:
+            self.univ = univ
+        if sch is None:
+            self.sch = Schedule('2000-01-01', '2016-01-01', type_='end', freq_='m')
+        else:
+            self.sch = sch
+
+        self.equity_obj = Equity()
+        self.equity_obj.initialize()
+        self.pipe = Pipeline()
+
+    def set_pipe(self, pipe_nm, item_dict):
+        is_loaded = self.pipe.load_pipeline(name=pipe_nm)
+        if not is_loaded:
+            self.pipe.add_pipeline(pipe_nm, universe=self.univ, item=item_dict)
+            self.pipe.run_pipeline(pipe_nm, schedule=self.sch, store_db=False, chunksize=1000)
+
+    def factor_write(self, winsorize=0.5, **factor_info):
+        pipe_nm = 'pipe_' + factor_info['name']
+        self.set_pipe(pipe_nm, factor_info['item'])
+        factor_nm = list(factor_info['item'])[0]
+        data = self.pipe.get_item(pipe_nm, factor_nm)
+
+        my_model = Model(data)
+        my_model.normalize(winsorize=winsorize)
+        order_table = my_model.make_order_table(**factor_info)
+        testing = Testing()
+        result_bm_ls = testing.backtest(order_table)
+
+        result_bm_ls.to_csv(r'txt//{}.csv'.format(factor_info['name']), header=True, index=None, sep=',', mode='w')
+
+
+
 class MyModel(Model):
     def __init__(self):
         pass
 
 
-class BackTesting:
-    def __init__(self, schedule):
-        self.schedule = schedule.code.lower().replace(
-            "eval_d as eval_d", "eval_d, isnull(lead(eval_d, 1) over (order by eval_d), '9999-12-31') as fwd_d")
+class TestingIO:
+    def __init__(self):
+        self.sqlm = SqlManager()
+        self.sqlm.set_db_name('qpipe')
 
-    def backtest(self, order_signal):
-        from dbmanager import SqlManager
-        import socket
-        import settings
-        import time
-        sqlm = SqlManager()
-        sqlm.set_db_name('qpipe')
-
+    @staticmethod
+    def _get_table_id(process_nm):
         my_ip = socket.gethostbyname(socket.gethostname())
         if my_ip in settings.ip_class.keys():
-            table_id = 'backtest_' + settings.ip_class[my_ip]
+            table_id = process_nm + '_' + settings.ip_class[my_ip]
         else:
-            table_id = 'backtest_' + 'unknown'
+            table_id = process_nm + '_' + 'unknown'
+        return table_id
+
+    def store_order(self, order_table, process_nm='backtest'):
+        import time
+        sqlm = self.sqlm
+
+        table_id = self._get_table_id(process_nm)
 
         sqlm.db_execute("""
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME=N'{table_id}')
@@ -124,35 +169,66 @@ class BackTesting:
         """.format(table_id=table_id))
         print('Table {} created.'.format(table_id))
 
-        sqlm.db_insert(order_signal, table_id, True)
-        print('Inserted.')
-
         s = time.time()
-        """
-        select a.eval_d, sum(a)
-from (
-        
-             select a.infocode, a.eval_d as calc_d, e.eval_d
-        		,  a.wgt * exp(sum(log(1+isnull(y, 0.))) 
-        		over (	partition by a.infocode, a.eval_d 
-        				order by e.eval_d rows 
-        				between unbounded preceding and current row))-1 as a
-        	from ({}) D
-        	join qpipe..{} A
-        	on D.eval_d = A.eval_d
-        	join qinv..EquityTradeDate E
-        	on E.Eval_d > d.eval_d and E.Eval_d <= d.fwd_d
-        	and a.infocode = E.Infocode
-        	left join qinv..EquityReturnDaily R
-        	on e.Eval_d = r.marketdate and a.infocode = r.infocode
-        	
-        	
-) a
-group by eval_d
-        """.format(self.schedule, table_id)
-
+        sqlm.db_insert(order_table, table_id, fast_executemany=True)
+        print('Inserted.')
         e = time.time()
-        print("calculation time: {} sec".format(e - s))
+        print("calculation time: {0:.2f} sec".format(e - s))
+
+    def execute(self, process_nm='backtest'):
+        if process_nm in ['backtest']:
+            table_id = self._get_table_id(process_nm)
+            sql_ = """            
+select a.eval_d, 100 + sum(cum_w) as w, 100 + sum(cum_y) as y,  (100 + sum(cum_y)) / (100 + sum(cum_w)) - 1 as y
+from (
+select  a.infocode, a.eval_d as calc_d, e.eval_d, y
+    , 100 * a.wgt * exp(sum(log(1+isnull(y, 0.))) 
+        over (	partition by a.infocode, a.eval_d 
+                order by e.eval_d rows 
+                between unbounded preceding and current row)) as cum_y
+    , 100 * a.wgt * isnull(exp(sum(log(1+isnull(y, 0.))) 
+        over (	partition by a.infocode, a.eval_d 
+                order by e.eval_d rows 
+                between unbounded preceding and 1 preceding)), 1) as cum_w
+    from (
+        select eval_d, isnull(lead(eval_d, 1) over (order by eval_d), dateadd(day, 31, eval_d)) as fwd_d
+            from qpipe..{table_id}		
+            group by eval_d
+    ) D
+    join (select * from qpipe..{table_id} A where wgt >= 0) a
+    on D.eval_d = A.eval_d	
+    join qinv..EquityTradeDate E
+    on a.infocode = E.Infocode and E.Eval_d > d.eval_d and E.Eval_d <= d.fwd_d
+    left join qinv..EquityReturnDaily R
+    on a.infocode = r.infocode and e.Eval_d = r.marketdate 
+) A
+group by a.eval_d
+order by a.eval_d
+            """.format(table_id=table_id)
+
+            df = self.sqlm.db_read(sql_)
+            return df
+
+
+
+
+class Testing(TestingIO):
+    def backtest(self, order_table, in_memory_test=False):
+        if in_memory_test is False:
+            self.store_order(order_table)
+        else:
+            print("In-memory calculation function will be added.")
+            self.store_order(order_table)
+
+        print("Successfully stored.")
+
+        print("Calculating...")
+        s = time.time()
+        df = self.execute('backtest')
+        e = time.time()
+        print("Done! [{0:.2f}]".format(e-s))
+        return df
+
 
 
 

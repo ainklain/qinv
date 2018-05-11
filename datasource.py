@@ -54,12 +54,15 @@ class ItemDefault:
     def __init__(self, item_cls=None, item_nm=None):
         self.item_set = set()
         self.expr = ''
+        self.asset_cls = ''
         if item_cls is not None:
             self.item_set.add('{}::{}'.format(item_cls, item_nm))
             self.expr = '[{}]'.format(item_nm)
 
     def __add__(self, other):
         return_item = Item()
+        assert self.asset_cls == other.asset_cls
+        return_item.asset_cls = self.asset_cls
         return_item.item_set = self.item_set | other.item_set
         return_item.expr = '(' + self.expr + '+' + other.expr + ')'
 
@@ -67,6 +70,8 @@ class ItemDefault:
 
     def __sub__(self, other):
         return_item = Item()
+        assert self.asset_cls == other.asset_cls
+        return_item.asset_cls = self.asset_cls
         return_item.item_set = self.item_set | other.item_set
         return_item.expr = '(' + self.expr + '-' + other.expr + ')'
 
@@ -74,6 +79,8 @@ class ItemDefault:
 
     def __mul__(self, other):
         return_item = Item()
+        assert self.asset_cls == other.asset_cls
+        return_item.asset_cls = self.asset_cls
         return_item.item_set = self.item_set | other.item_set
         return_item.expr = '(' + self.expr + '*' + other.expr + ')'
 
@@ -81,6 +88,8 @@ class ItemDefault:
 
     def __truediv__(self, other):
         return_item = Item()
+        assert self.asset_cls == other.asset_cls
+        return_item.asset_cls = self.asset_cls
         return_item.item_set = self.item_set | other.item_set
         return_item.expr = '(' + self.expr + '/ nullif(' + other.expr + ',0))'
 
@@ -97,6 +106,7 @@ class Item(ItemDefault):
     """
     def __init__(self, item_cls=None, item_nm=None, **kwargs):
         super().__init__(item_cls, item_nm)
+        self.asset_cls = kwargs.get('asset_cls')
         self._set_attr(**kwargs)
 
     def _set_attr(self, **kwargs):
@@ -198,12 +208,17 @@ class Schedule:
             pass
 
 
-class Equity:
+class Asset:
+    def __init__(self):
+        self.asset_cls = self.__class__.__name__.lower()
+
+class Equity(Asset):
     """
         equity 관련 데이터 처리를 위한 클래스
         하나의 equity 객체를 통해 여러 데이터를 가져올 수 있게끔
     """
     def __init__(self):
+        super().__init__()
         self.item_dict = settings.item_dict['equity']
         self.is_initialize = False
 
@@ -230,7 +245,8 @@ class Equity:
 
             if item_nm in self.item_dict[key]:
                 print('{} {}'.format(key, item_nm))
-                return Item(key, item_nm)
+
+                return Item(key, item_nm, asset_cls=self.asset_cls)
 
         print("[Equity] No Item in the DB list. Please Check [settings->item_dict] or [Item class]")
         return None
@@ -259,6 +275,7 @@ class Equity:
         return return_str
 
 
+
 # univ = Universe()
 # univ.add_univ('equity', 'us_all')
 # univ.add_univ('equity', 'kr_all')
@@ -269,8 +286,14 @@ class Universe:
         투자 asset class별로 따로 관리하며 같은 asset에 대해서는 리스트로 관리
     """
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.univ_dict = dict()
+        for key in kwargs.keys():
+            if isinstance(kwargs[key], str):
+                self.add_univ(key, kwargs[key])
+            elif isinstance(kwargs[key], list):
+                for item in kwargs[key]:
+                    self.add_univ(key, item)
 
     def add_univ(self, type_, name):
         """
@@ -282,13 +305,17 @@ class Universe:
          이 부분에서 에러가 발생할 경우 settings에서 DB에 있는 내용을 추가해주거나 혹은 오타 확인
          settings의 값을 자동 추가 혹은 변경하는 방법은 추후 initialize()등을 만들어서 할 수도 있음
         """
-        assert type_ in settings.univ_dict_sql.keys()
-        assert name in settings.univ_dict_sql[type_]
+        if (type_ not in settings.univ_dict_sql.keys()) or (name not in settings.univ_dict_sql[type_]):
+            print("""Asset:{}, Univ:{} cannot be added. Please check settings.univ_dict_sql. 
+            """.format(type_, name))
+            return None
 
         if type_ not in self.univ_dict.keys():
             self.univ_dict[type_] = [name]
         else:
             self.univ_dict[type_].append(name)
+
+        return True
 
     def __getitem__(self, item):
         if item in self.univ_dict.keys():

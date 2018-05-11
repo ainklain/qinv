@@ -1,5 +1,6 @@
 import socket
 import settings
+import time
 from dbmanager import SqlManager
 from datasource import Helper
 
@@ -76,7 +77,7 @@ class PipeIO:
 
             return True
 
-    def store_pipeline(self, name, sch_obj):
+    def store_pipeline(self, name, sch_obj, chunksize=1000):
         sqlm = SqlManager()
         sqlm.set_db_name('qpipe')
 
@@ -92,7 +93,9 @@ class PipeIO:
         sqlm.db_execute("""        
         DELETE FROM QPIPE..PIPE_INFORMATION WHERE TABLE_ID = '{table_id}' AND SCHEDULE_STR = '{sch}'
         INSERT INTO qpipe..pipe_information VALUES ('{table_id}','{sch}','{code_str}', getdate())
+        """.format(table_id=pipe_dict.table_id, code_str=enc_dict, sch=sch_str))
 
+        sqlm.db_execute("""
         IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME=N'{table_id}')
         BEGIN
         create table {table_id} (item_nm varchar(40), infocode int, eval_d date, value_ float
@@ -102,24 +105,29 @@ class PipeIO:
         ELSE BEGIN
         truncate table {table_id}
         END
-        """.format(table_id=pipe_dict.table_id, code_str=enc_dict, sch=sch_str))
+        """.format(table_id=pipe_dict.table_id))
 
-        univ_str = '&'.join(pipe_dict.universe)
-        schedule_str = pipe_dict.code.replace("'", "''")
+        # equities/commodities/fx 전략 구분하여 적용 위함
+        for asset_cls in pipe_dict.universe.univ_dict.keys():
+            univ_str = '&'.join(pipe_dict.universe[asset_cls])
+            schedule_str = sch_obj.code.replace("'", "''")
 
-        for item_key in pipe_dict.item.keys():
-            item_str = '&'.join(pipe_dict.item[item_key].item_set)
-            item_expr = pipe_dict.item[item_key].expr
+            for item_key in pipe_dict.item.keys():
+                if pipe_dict.item[item_key].asset_cls != asset_cls:
+                    continue
 
-            sql_code = sqlm.db_read("select qinv.dbo.FS_CodeAssembler('{}', '{}', '{}', '{}')".format(
-                univ_str, item_str, item_expr, schedule_str))
-            sql_code = sql_code.values[0][0]
+                item_str = '&'.join(pipe_dict.item[item_key].item_set)
+                item_expr = pipe_dict.item[item_key].expr
+                sql_code = """exec qinv.dbo.SP_Run_EquityItems '{}', '{}', '{}', '{}', '{}', '{}', {}""".format(
+                    univ_str, item_str, item_expr, schedule_str, pipe_dict.table_id, item_key, chunksize)
+                pipe_dict.addattr(sql_code=sql_code)
 
-            # return_dict[item_key] = sqlm.db_execute(sql_code)
+                st = time.time()
+                print(sql_code)
+                sqlm.db_execute(sql_code)
+                et = time.time()
 
-            pipe_dict.addattr(sql_code=sql_code)
-            sqlm.db_execute(
-                """insert into {} \n{}""".format(pipe_dict.table_id, sql_code.replace('[item_nm]', item_key)))
+                print("Successfully Stored. [{0:.2f} sec]".format(et-st))
 
     def get_item(self, name, item_id):
         sqlm = SqlManager()
@@ -136,25 +144,6 @@ class PipeIO:
             return None
         return item_data
 
-    def get_code(self, name, schedule):
-        """어디 쓰이지??"""
-        sqlm = SqlManager()
-        sqlm.set_db_name('qinv')
-        mypipe = self.pipeline[name]
-        univ_str = '&'.join(mypipe.universe)
-        schedule_str = schedule.code.replace("'", "''")
-
-        code_list = dict()
-        for item_key in mypipe.item.keys():
-            item_str = '&'.join(mypipe.item[item_key].item_set)
-            item_expr = mypipe.item[item_key].expr
-
-            sql_code = sqlm.db_read("select qinv.dbo.FS_CodeAssembler('{}', '{}', '{}', '{}')".format(
-                univ_str, item_str, item_expr, schedule_str))
-            sql_code = sql_code.values[0][0]
-            code_list[item_key] = sql_code
-        return code_list
-
     def __getitem__(self, name):
         return self.pipeline[name]
 
@@ -165,6 +154,25 @@ class PipeIO:
             return_str += self.pipeline[name].__repr__()
 
         return return_str
+
+    # def get_code(self, name, schedule):
+    #     """어디 쓰이지??"""
+    #     sqlm = SqlManager()
+    #     sqlm.set_db_name('qinv')
+    #     mypipe = self.pipeline[name]
+    #     univ_str = '&'.join(mypipe.universe)
+    #     schedule_str = schedule.code.replace("'", "''")
+    #
+    #     code_list = dict()
+    #     for item_key in mypipe.item.keys():
+    #         item_str = '&'.join(mypipe.item[item_key].item_set)
+    #         item_expr = mypipe.item[item_key].expr
+    #
+    #         sql_code = sqlm.db_read("select qinv.dbo.FS_CodeAssembler('{}', '{}', '{}', '{}')".format(
+    #             univ_str, item_str, item_expr, schedule_str))
+    #         sql_code = sql_code.values[0][0]
+    #         code_list[item_key] = sql_code
+    #     return code_list
 
 
 class Pipeline(PipeIO):
@@ -186,11 +194,11 @@ class Pipeline(PipeIO):
         self.pipeline[name] = PipeInfo(**kwargs)
         self.pipeline[name].addattr(table_id=PipeIO.get_table_id(name))
 
-    def run_pipeline(self, name, schedule=None, store_db=False):
+    def run_pipeline(self, name, schedule=None, store_db=False, chunksize=1000):
         #
         is_loaded = self.load_pipeline(name, overwrite=False)
         if (store_db is True) or (is_loaded is False):
             if schedule is None:
                 print('Schedule should be set.')
                 return None
-            self.store_pipeline(name=name, sch_obj=schedule)
+            self.store_pipeline(name=name, sch_obj=schedule, chunksize=chunksize)
