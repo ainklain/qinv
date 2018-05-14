@@ -6,7 +6,7 @@ from datasource import Helper
 
 # pipe = Pipeline()
 # factor_obj = Factor() ?!
-# pipe.add_pipeline('pipe_equity', universe=univ.univ_dict['equity'], item=item_obj)
+# pipe.add('pipe_equity', universe=univ.univ_dict['equity'], item=item_obj)
 class PipeInfo:
     """
         Pipeline을 통해 DB의 데이터를 가져오기 위한 필요 데이터관련 정보
@@ -54,7 +54,7 @@ class PipeIO:
         else:
             return True
 
-    def load_pipeline(self, name, overwrite=False):
+    def load(self, name, overwrite=False):
         """DB에 pipeline이 저장되어 있으면 True 아니면 False"""
         sqlm = SqlManager()
         sqlm.set_db_name('qpipe')
@@ -63,7 +63,7 @@ class PipeIO:
         df = sqlm.db_read("SELECT code_str FROM qpipe..Pipe_Information where table_id = '{}'".format(table_id))
 
         if df.empty:
-            print("[load_pipeline] Not exists pipe:'{}'".format(name))
+            print("[load] Not exists pipe:'{}'".format(name))
             return False
         else:
             code_dict = eval(df.loc[0][0].replace("?", "'"))
@@ -71,13 +71,13 @@ class PipeIO:
 
             if (overwrite is True) or (name not in self.pipeline.keys()):
                 self.pipeline[name] = PipeInfo(table_id=table_id, **decoded_dict)
-                print("[load_pipeline] Successfully loaded")
+                print("[load] Successfully loaded")
             else:
-                print("[load_pipeline] Already exists or Overwrite is not allowed. Use 'overwrite=True' if you want.")
+                print("[load] Already exists or Overwrite is not allowed. Use 'overwrite=True' if you want.")
 
             return True
 
-    def store_pipeline(self, name, sch_obj, chunksize=1000):
+    def store(self, name, sch_obj, chunksize=1000):
         sqlm = SqlManager()
         sqlm.set_db_name('qpipe')
 
@@ -129,18 +129,23 @@ class PipeIO:
 
                 print("Successfully Stored. [{0:.2f} sec]".format(et-st))
 
-    def get_item(self, name, item_id):
+    def get_item(self, name, **kwargs):
+        item_id = kwargs.get('item_id', None)
         sqlm = SqlManager()
         sqlm.set_db_name('qpipe')
 
         table_id = self.pipeline[name].table_id
-        if item_id not in self.pipeline[name].item.keys():
-            print('No such item exists')
-            return None
+        if item_id is None:
+            item_data = sqlm.db_read("select * from {}".format(table_id))
+        else:
+            if item_id not in self.pipeline[name].item.keys():
+                print('No such item exists')
+                return None
 
-        item_data = sqlm.db_read("select * from {} where item_nm='{}'".format(table_id, item_id))
+            item_data = sqlm.db_read("select * from {} where item_nm='{}'".format(table_id, item_id))
+
         if item_data.empty:
-            print('You should [run_pipeline] first.')
+            print('You should [run] first.')
             return None
         return item_data
 
@@ -177,28 +182,28 @@ class PipeIO:
 
 class Pipeline(PipeIO):
     """
-        받고자 하는 데이터를 abstract 수준으로 받아서 pipeline별로 add_pipeline을 통해 추가
-        run_pipeline을 통해 실제로 DB연결을 통해 데이터를 한꺼번에 받아오기
+        받고자 하는 데이터를 abstract 수준으로 받아서 pipeline별로 add을 통해 추가
+        run을 통해 실제로 DB연결을 통해 데이터를 한꺼번에 받아오기
 
         pipeline은 dictionary로 관리되며 key는 pipeline의 이름, value는 DataInfo타입의 class object로 저장   
 
         pipeline class object 자체는 하나만 생성하되, 목적별로 다른 데이터를 pipeline name으로 구별
-        run_pipeline도 name별로 그떄그때 가져오는 방식
+        run도 name별로 그떄그때 가져오는 방식
     """
     def __init__(self, name=None):
         self.pipeline = dict()
         if name is not None:
-            self.load_pipeline(name=name)
+            self.load(name=name)
 
-    def add_pipeline(self, name, **kwargs):
+    def add(self, name, **kwargs):
         self.pipeline[name] = PipeInfo(**kwargs)
         self.pipeline[name].addattr(table_id=PipeIO.get_table_id(name))
 
-    def run_pipeline(self, name, schedule=None, store_db=False, chunksize=1000):
+    def run(self, name, schedule=None, store_db=False, chunksize=1000):
         #
-        is_loaded = self.load_pipeline(name, overwrite=False)
+        is_loaded = self.load(name, overwrite=False)
         if (store_db is True) or (is_loaded is False):
             if schedule is None:
                 print('Schedule should be set.')
                 return None
-            self.store_pipeline(name=name, sch_obj=schedule, chunksize=chunksize)
+            self.store(name=name, sch_obj=schedule, chunksize=chunksize)

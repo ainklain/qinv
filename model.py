@@ -9,6 +9,7 @@ from datasource import Equity, Schedule, Universe
 from pipeline import Pipeline
 __version__ = '1.0.0'
 
+
 class Model:
     """
     x = Model(data_mktcap)
@@ -29,31 +30,37 @@ class Model:
             arr = np.array(self.data.loc[cond_sch, 'value_'])
             self.data.loc[cond_sch, 'value_'] = (arr - np.mean(arr)) / np.std(arr)
 
-        if winsorize > 0:
+        if winsorize > 0 or winsorize is None:
             self.data.loc[self.data['value_'] > winsorize, 'value_'] = winsorize 
             self.data.loc[self.data['value_'] < -winsorize, 'value_'] = -winsorize
 
     def make_order_table(self, q=0.3, weight='equal', long_short='LS', reverse=False, min_n_of_stocks=10, **kw):
-        if q >= 1:
-            q = 1.
+        print('q:{} / reverse:{}'.format(q, reverse))
+
+        if q >= 0.5:
+            q = 0.499
         elif q <= 0:
             q = 0.
 
-        if reverse is False:
-            q_long = (1. - q) * 100.
-            q_short = q * 100.
-        else:
-            q_long = q * 100.
-            q_short = (1. - q) * 100.
+        q_high = (1. - q) * 100.
+        q_low = q * 100.
 
         sch_skipped = list()
         wgt_table = pd.DataFrame(columns=['eval_d', 'infocode', 'wgt'])
         for sch_ in self.sch:
             cond_sch = np.array(self.data['eval_d'] == sch_)
-            cond_long = np.array(self.data[cond_sch]['value_']
-                                 >= np.percentile(self.data[cond_sch]['value_'], q_long))
-            cond_short = np.array(self.data[cond_sch]['value_']
-                                  <= np.percentile(self.data[cond_sch]['value_'], q_short))
+            cond_high = np.array(self.data[cond_sch]['value_']
+                                 >= np.percentile(self.data[cond_sch]['value_'], q_high)+0.0001)
+            cond_low = np.array(self.data[cond_sch]['value_']
+                                <= np.percentile(self.data[cond_sch]['value_'], q_low)-0.0001)
+            # cond_high = cond_low 인 종목의 경우 primary key 에러 발생(L에도 포함, S에도 포함. 0.0001로 방지)
+
+            if reverse is False:
+                cond_long = cond_high
+                cond_short = cond_low
+            else:
+                cond_long = cond_low
+                cond_short = cond_high
 
             # 포트폴리오 구성 최소 종목수
             if sum(cond_long) < min_n_of_stocks or sum(cond_short) < min_n_of_stocks:
@@ -93,7 +100,6 @@ class Model:
         return wgt_table
 
 
-
 class ModelDefault:
     def __init__(self, univ=None, sch=None, **kwargs):
         if univ is None:
@@ -109,15 +115,22 @@ class ModelDefault:
         self.equity_obj.initialize()
         self.pipe = Pipeline()
 
-    def set_pipe(self, pipe_nm, item_dict):
-        is_loaded = self.pipe.load_pipeline(name=pipe_nm)
+    def set_pipe(self, pipe_nm, item_dict, store_db=False):
+        is_loaded = self.pipe.load(name=pipe_nm)
         if not is_loaded:
-            self.pipe.add_pipeline(pipe_nm, universe=self.univ, item=item_dict)
-            self.pipe.run_pipeline(pipe_nm, schedule=self.sch, store_db=False, chunksize=1000)
+            self.pipe.add(pipe_nm, universe=self.univ, item=item_dict)
+            self.pipe.run(pipe_nm, schedule=self.sch, store_db=store_db, chunksize=1000)
+
+    def set_pipe_by_info(self, **factor_info):
+        pipe_nm = 'pipe_' + factor_info['name']
+        store_db = factor_info.get('store_db', False)
+        item_dict = factor_info['item']
+        self.set_pipe(pipe_nm, item_dict, store_db=store_db)
 
     def factor_write(self, winsorize=0.5, **factor_info):
         pipe_nm = 'pipe_' + factor_info['name']
-        self.set_pipe(pipe_nm, factor_info['item'])
+        store_db = factor_info.get('store_db', False)
+        self.set_pipe(pipe_nm, factor_info['item'], store_db=store_db)
         factor_nm = list(factor_info['item'])[0]
         data = self.pipe.get_item(pipe_nm, factor_nm)
 
@@ -128,12 +141,7 @@ class ModelDefault:
         result_bm_ls = testing.backtest(order_table)
 
         result_bm_ls.to_csv(r'txt//{}.csv'.format(factor_info['name']), header=True, index=None, sep=',', mode='w')
-
-
-
-class MyModel(Model):
-    def __init__(self):
-        pass
+        return result_bm_ls
 
 
 class TestingIO:
@@ -179,37 +187,35 @@ class TestingIO:
         if process_nm in ['backtest']:
             table_id = self._get_table_id(process_nm)
             sql_ = """            
-select a.eval_d, 100 + sum(cum_w) as w, 100 + sum(cum_y) as y,  (100 + sum(cum_y)) / (100 + sum(cum_w)) - 1 as y
-from (
-select  a.infocode, a.eval_d as calc_d, e.eval_d, y
-    , 100 * a.wgt * exp(sum(log(1+isnull(y, 0.))) 
-        over (	partition by a.infocode, a.eval_d 
-                order by e.eval_d rows 
-                between unbounded preceding and current row)) as cum_y
-    , 100 * a.wgt * isnull(exp(sum(log(1+isnull(y, 0.))) 
-        over (	partition by a.infocode, a.eval_d 
-                order by e.eval_d rows 
-                between unbounded preceding and 1 preceding)), 1) as cum_w
-    from (
-        select eval_d, isnull(lead(eval_d, 1) over (order by eval_d), dateadd(day, 31, eval_d)) as fwd_d
-            from qpipe..{table_id}		
-            group by eval_d
-    ) D
-    join (select * from qpipe..{table_id} A where wgt >= 0) a
-    on D.eval_d = A.eval_d	
-    join qinv..EquityTradeDate E
-    on a.infocode = E.Infocode and E.Eval_d > d.eval_d and E.Eval_d <= d.fwd_d
-    left join qinv..EquityReturnDaily R
-    on a.infocode = r.infocode and e.Eval_d = r.marketdate 
-) A
-group by a.eval_d
-order by a.eval_d
+            select a.eval_d, 100 + sum(cum_w) as w, 100 + sum(cum_y) as y,  (100 + sum(cum_y)) / (100 + sum(cum_w)) - 1 as y
+            from (
+            select  a.infocode, a.eval_d as calc_d, e.eval_d, y
+                , 100 * a.wgt * exp(sum(log(1+isnull(y, 0.))) 
+                    over (	partition by a.infocode, a.eval_d 
+                            order by e.eval_d rows 
+                            between unbounded preceding and current row)) as cum_y
+                , 100 * a.wgt * isnull(exp(sum(log(1+isnull(y, 0.))) 
+                    over (	partition by a.infocode, a.eval_d 
+                            order by e.eval_d rows 
+                            between unbounded preceding and 1 preceding)), 1) as cum_w
+                from (
+                    select eval_d, isnull(lead(eval_d, 1) over (order by eval_d), dateadd(day, 31, eval_d)) as fwd_d
+                        from qpipe..{table_id}		
+                        group by eval_d
+                ) D
+                join (select * from qpipe..{table_id} A) a
+                on D.eval_d = A.eval_d	
+                join qinv..EquityTradeDate E
+                on a.infocode = E.Infocode and E.Eval_d > d.eval_d and E.Eval_d <= d.fwd_d
+                left join qinv..EquityReturnDaily R
+                on a.infocode = r.infocode and e.Eval_d = r.marketdate 
+            ) A
+            group by a.eval_d
+            order by a.eval_d
             """.format(table_id=table_id)
 
             df = self.sqlm.db_read(sql_)
             return df
-
-
 
 
 class Testing(TestingIO):
@@ -237,7 +243,7 @@ class Testing(TestingIO):
 
 
 
-        """
+"""
      select a.infocode, a.eval_d , e.eval_d, e.buy_d
 		, exp(sum(log(1+isnull(y, 0.))) 
 		over (	partition by a.infocode, a.eval_d 
