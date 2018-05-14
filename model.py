@@ -1,11 +1,10 @@
 import pandas as pd
 import numpy as np
 import time
-import socket
 import settings
 from dbmanager import SqlManager
 
-from datasource import Equity, Schedule, Universe
+from datasource import Equity, Schedule, Universe, IO
 from pipeline import Pipeline
 __version__ = '1.0.0'
 
@@ -115,22 +114,20 @@ class ModelDefault:
         self.equity_obj.initialize()
         self.pipe = Pipeline()
 
-    def set_pipe(self, pipe_nm, item_dict, store_db=False):
-        is_loaded = self.pipe.load(name=pipe_nm)
+    def set_pipe(self, pipe_nm, item_dict, store_result=False, overwrite_pipe=False, chunksize=1000, **kwargs):
+        is_loaded = self.pipe.load(name=pipe_nm, overwrite_pipe=overwrite_pipe)
         if not is_loaded:
             self.pipe.add(pipe_nm, universe=self.univ, item=item_dict)
-            self.pipe.run(pipe_nm, schedule=self.sch, store_db=store_db, chunksize=1000)
+            self.pipe.run(pipe_nm, schedule=self.sch, store_result=store_result, chunksize=chunksize)
 
     def set_pipe_by_info(self, **factor_info):
-        pipe_nm = 'pipe_' + factor_info['name']
-        store_db = factor_info.get('store_db', False)
+        pipe_nm = factor_info['name']
         item_dict = factor_info['item']
-        self.set_pipe(pipe_nm, item_dict, store_db=store_db)
+        self.set_pipe(pipe_nm, item_dict, **factor_info)
 
     def factor_write(self, winsorize=0.5, **factor_info):
-        pipe_nm = 'pipe_' + factor_info['name']
-        store_db = factor_info.get('store_db', False)
-        self.set_pipe(pipe_nm, factor_info['item'], store_db=store_db)
+        pipe_nm = factor_info['name']
+        self.set_pipe(pipe_nm, factor_info['item'], **factor_info)
         factor_nm = list(factor_info['item'])[0]
         data = self.pipe.get_item(pipe_nm, factor_nm)
 
@@ -144,19 +141,11 @@ class ModelDefault:
         return result_bm_ls
 
 
-class TestingIO:
+
+class TestingIO(IO):
     def __init__(self):
         self.sqlm = SqlManager()
         self.sqlm.set_db_name('qpipe')
-
-    @staticmethod
-    def _get_table_id(process_nm):
-        my_ip = socket.gethostbyname(socket.gethostname())
-        if my_ip in settings.ip_class.keys():
-            table_id = process_nm + '_' + settings.ip_class[my_ip]
-        else:
-            table_id = process_nm + '_' + 'unknown'
-        return table_id
 
     def store_order(self, order_table, process_nm='backtest'):
         import time
@@ -185,7 +174,7 @@ class TestingIO:
 
     def execute(self, process_nm='backtest'):
         if process_nm in ['backtest']:
-            table_id = self._get_table_id(process_nm)
+            table_id = self.get_table_id(process_nm)
             sql_ = """            
             select a.eval_d, 100 + sum(cum_w) as w, 100 + sum(cum_y) as y,  (100 + sum(cum_y)) / (100 + sum(cum_w)) - 1 as y
             from (

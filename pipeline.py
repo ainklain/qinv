@@ -2,7 +2,7 @@ import socket
 import settings
 import time
 from dbmanager import SqlManager
-from datasource import Helper
+from datasource import Helper, IO
 
 # pipe = Pipeline()
 # factor_obj = Factor() ?!
@@ -29,18 +29,9 @@ class PipeInfo:
         return return_str
 
 
-class PipeIO:
+class PipeIO(IO):
     def __init__(self):
         self.pipeline = dict()
-
-    @staticmethod
-    def get_table_id(name):
-        my_ip = socket.gethostbyname(socket.gethostname())
-        if my_ip in settings.ip_class.keys():
-            table_id = name + '_' + settings.ip_class[my_ip]
-        else:
-            table_id = name + '_' + 'unknown'
-        return table_id
 
     @staticmethod
     def is_stored(name):
@@ -54,7 +45,7 @@ class PipeIO:
         else:
             return True
 
-    def load(self, name, overwrite=False):
+    def load(self, name, overwrite_pipe=False):
         """DB에 pipeline이 저장되어 있으면 True 아니면 False"""
         sqlm = SqlManager()
         sqlm.set_db_name('qpipe')
@@ -69,11 +60,11 @@ class PipeIO:
             code_dict = eval(df.loc[0][0].replace("?", "'"))
             decoded_dict = Helper.bulk_decode(**code_dict)
 
-            if (overwrite is True) or (name not in self.pipeline.keys()):
+            if (overwrite_pipe is True) or (name not in self.pipeline.keys()):
                 self.pipeline[name] = PipeInfo(table_id=table_id, **decoded_dict)
                 print("[load] Successfully loaded")
             else:
-                print("[load] Already exists or Overwrite is not allowed. Use 'overwrite=True' if you want.")
+                print("[load] Already exists or Overwrite is not allowed. Use 'overwrite_pipe=True' if you want.")
 
             return True
 
@@ -190,19 +181,19 @@ class Pipeline(PipeIO):
         pipeline class object 자체는 하나만 생성하되, 목적별로 다른 데이터를 pipeline name으로 구별
         run도 name별로 그떄그때 가져오는 방식
     """
-    def __init__(self, name=None):
+    def __init__(self, name=None, overwrite_pipe=False):
         self.pipeline = dict()
         if name is not None:
-            self.load(name=name)
+            self.load(name=name, overwrite_pipe=overwrite_pipe)
 
     def add(self, name, **kwargs):
         self.pipeline[name] = PipeInfo(**kwargs)
         self.pipeline[name].addattr(table_id=PipeIO.get_table_id(name))
 
-    def run(self, name, schedule=None, store_db=False, chunksize=1000):
+    def run(self, name, schedule=None, store_result=False, chunksize=1000, overwrite_pipe=False):
         #
-        is_loaded = self.load(name, overwrite=False)
-        if (store_db is True) or (is_loaded is False):
+        is_loaded = self.load(name, overwrite_pipe=overwrite_pipe)
+        if (store_result is True) or (is_loaded is False):
             if schedule is None:
                 print('Schedule should be set.')
                 return None

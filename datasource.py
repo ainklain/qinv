@@ -1,8 +1,20 @@
 import settings
+import socket
 from dbmanager import SqlManager
 
 
 __version__ = '1.1.0'
+
+
+class IO:
+    @staticmethod
+    def get_table_id(name):
+        my_ip = socket.gethostbyname(socket.gethostname())
+        if my_ip in settings.ip_class.keys():
+            table_id = name + '_' + settings.ip_class[my_ip]
+        else:
+            table_id = name + '_' + 'unknown'
+        return table_id
 
 
 class Helper:
