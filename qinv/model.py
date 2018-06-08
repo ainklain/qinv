@@ -1,11 +1,11 @@
 import pandas as pd
 import numpy as np
 import time
-import settings
-from dbmanager import SqlManager
-
-from datasource import Equity, Schedule, Universe, IO
-from pipeline import Pipeline
+from qdata.datasource import TestingIO
+from qinv.schedule import Schedule
+from qinv.universe import Universe
+from qinv.asset import Equity
+from qdata.pipeline import Pipeline
 __version__ = '1.0.0'
 
 
@@ -30,7 +30,7 @@ class Model:
             self.data.loc[cond_sch, 'value_'] = (arr - np.mean(arr)) / np.std(arr)
 
         if winsorize > 0 or winsorize is None:
-            self.data.loc[self.data['value_'] > winsorize, 'value_'] = winsorize 
+            self.data.loc[self.data['value_'] > winsorize, 'value_'] = winsorize
             self.data.loc[self.data['value_'] < -winsorize, 'value_'] = -winsorize
 
     def make_order_table(self, q=0.3, weight='equal', long_short='LS', reverse=False, min_n_of_stocks=10, **kw):
@@ -41,8 +41,8 @@ class Model:
         elif q <= 0:
             q = 0.
 
-        q_high = (1. - q) * 100.
-        q_low = q * 100.
+        q_high = int((1. - q) * 100.)
+        q_low = int(q * 100.)
 
         sch_skipped = list()
         wgt_table = pd.DataFrame(columns=['eval_d', 'infocode', 'wgt'])
@@ -70,12 +70,12 @@ class Model:
             if weight.lower() in ['equal', 'eq', 'ew']:
                 wgt_long = 1. / sum(cond_long)
                 wgt_short = 1. / sum(cond_short)
-            elif weight.lower() in ['rank']:
-                pass
-            elif weight.lower() in ['value', 'vw']:
-                pass
-            elif weight.lower() in ['volatility', 'vol']:
-                pass
+            # elif weight.lower() in ['rank']:
+            #     pass
+            # elif weight.lower() in ['value', 'vw']:
+            #     pass
+            # elif weight.lower() in ['volatility', 'vol']:
+            #     pass
             else:
                 wgt_long = 1. / sum(cond_long)
                 wgt_short = 1. / sum(cond_short)
@@ -129,7 +129,7 @@ class ModelDefault:
         pipe_nm = factor_info['name']
         self.set_pipe(pipe_nm, factor_info['item'], **factor_info)
         factor_nm = list(factor_info['item'])[0]
-        data = self.pipe.get_item(pipe_nm, factor_nm)
+        data = self.pipe.get_item(pipe_nm, item_id=factor_nm)
 
         my_model = Model(data)
         my_model.normalize(winsorize=winsorize)
@@ -141,79 +141,13 @@ class ModelDefault:
         return result_bm_ls
 
 
-
-class TestingIO(IO):
-    def __init__(self):
-        self.sqlm = SqlManager()
-        self.sqlm.set_db_name('qpipe')
-
-    def store_order(self, order_table, process_nm='backtest'):
-        import time
-        sqlm = self.sqlm
-
-        table_id = self._get_table_id(process_nm)
-
-        sqlm.db_execute("""
-        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME=N'{table_id}')
-        BEGIN
-        create table {table_id} (eval_d date, infocode int, wgt float
-        primary key(eval_d, infocode)
-        )
-        END
-        ELSE BEGIN
-        truncate table {table_id}
-        END
-        """.format(table_id=table_id))
-        print('Table {} created.'.format(table_id))
-
-        s = time.time()
-        sqlm.db_insert(order_table, table_id, fast_executemany=True)
-        print('Inserted.')
-        e = time.time()
-        print("calculation time: {0:.2f} sec".format(e - s))
-
-    def execute(self, process_nm='backtest'):
-        if process_nm in ['backtest']:
-            table_id = self.get_table_id(process_nm)
-            sql_ = """            
-            select a.eval_d, 100 + sum(cum_w) as w, 100 + sum(cum_y) as y,  (100 + sum(cum_y)) / (100 + sum(cum_w)) - 1 as y
-            from (
-            select  a.infocode, a.eval_d as calc_d, e.eval_d, y
-                , 100 * a.wgt * exp(sum(log(1+isnull(y, 0.))) 
-                    over (	partition by a.infocode, a.eval_d 
-                            order by e.eval_d rows 
-                            between unbounded preceding and current row)) as cum_y
-                , 100 * a.wgt * isnull(exp(sum(log(1+isnull(y, 0.))) 
-                    over (	partition by a.infocode, a.eval_d 
-                            order by e.eval_d rows 
-                            between unbounded preceding and 1 preceding)), 1) as cum_w
-                from (
-                    select eval_d, isnull(lead(eval_d, 1) over (order by eval_d), dateadd(day, 31, eval_d)) as fwd_d
-                        from qpipe..{table_id}		
-                        group by eval_d
-                ) D
-                join (select * from qpipe..{table_id} A) a
-                on D.eval_d = A.eval_d	
-                join qinv..EquityTradeDate E
-                on a.infocode = E.Infocode and E.Eval_d > d.eval_d and E.Eval_d <= d.fwd_d
-                left join qinv..EquityReturnDaily R
-                on a.infocode = r.infocode and e.Eval_d = r.marketdate 
-            ) A
-            group by a.eval_d
-            order by a.eval_d
-            """.format(table_id=table_id)
-
-            df = self.sqlm.db_read(sql_)
-            return df
-
-
 class Testing(TestingIO):
     def backtest(self, order_table, in_memory_test=False):
         if in_memory_test is False:
-            self.store_order(order_table)
+            self.store(order_table)
         else:
             print("In-memory calculation function will be added.")
-            self.store_order(order_table)
+            self.store(order_table)
 
         print("Successfully stored.")
 

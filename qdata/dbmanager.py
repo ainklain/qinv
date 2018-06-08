@@ -1,16 +1,17 @@
 import pyodbc
 import pandas as pd
 from pandas.io.sql import read_sql
-from settings import sql_config
+from qinv.settings import sql_config
 
 __version__ = '1.0.1'
 
+
 class SqlManager:
-    conn = None
     def __init__(self, server_name=sql_config['server_name']
                  , db_name=sql_config['db_name']
                  , usr=sql_config['usr']
                  , pwd=sql_config['pwd']):
+        self.conn = None
         self.server_name = server_name
         self.db_name = db_name
         self.usr = usr
@@ -68,7 +69,6 @@ class SqlManager:
             del cursor
 
         self.db_close()
-
 
 
 # ### insert examples ###
