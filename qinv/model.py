@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import time
+from functools import partial
 from qdata.datasource import TestingIO
 from qinv.schedule import Schedule
 from qinv.universe import Universe
@@ -9,98 +10,109 @@ from qdata.pipeline import Pipeline
 __version__ = '1.0.0'
 
 
-class Model:
+class Strategy:
     """
-    x = Model(data_mktcap)
-    x.normalize(winsorize=0.5)
-    order_signal = x.make_order_signal(min_n_of_stocks=2)
-    bt = BackTesting(sch_obj)
+    data_be = fundamentals['be'].copy()
+    x = Strategy(data_be)
+    x.normalize()
+    x.winsorize(0.01, True)
+    make_order_table = x.make_order_table()
+    bt = Testing(make_order_table)
     """
     def __init__(self, data):
         """
-        :param data: eval_d / infocode / value_ 로 구성된 DataFrame 
+        :param data: index: (eval_d & infocode) / data: value_ 로 구성된 DataFrame
         """
-        self.sch = sorted(list(set(data['eval_d'])))
+        data.columns = pd.Index(['value_'])
+        self.sch = sorted(list(set(data.index.get_level_values('eval_d'))))
+        # self.sch = sorted(list(set(data['eval_d'])))
         self.data = data[~data['value_'].isna()]
 
-    def normalize(self, winsorize=0.0):
-        for sch_ in self.sch:
-            cond_sch = np.array(self.data['eval_d'] == sch_)
-            arr = np.array(self.data.loc[cond_sch, 'value_'])
-            self.data.loc[cond_sch, 'value_'] = (arr - np.mean(arr)) / np.std(arr)
+    @staticmethod
+    def _winsor_func(x, p, pct_winsor=False):
+        # p: percent value if pct_winsor is True,
+        #    absolute value if pct_winsor is False
 
-        if winsorize > 0 or winsorize is None:
-            self.data.loc[self.data['value_'] > winsorize, 'value_'] = winsorize
-            self.data.loc[self.data['value_'] < -winsorize, 'value_'] = -winsorize
+        if pct_winsor is True:
+            if p < 0.5:
+                x[x > np.percentile(x, 100. * (1-p))] = np.percentile(x, 100. * (1-p))
+                x[x < np.percentile(x, 100. * p)] = np.percentile(x, 100. * p)
+            else:
+                print('p should be lower than 0.5 if use pct_winsor.')
+        else:
+            x[x > p] = p
+            x[x < -p] = -p
 
-    def make_order_table(self, q=0.3, weight='equal', long_short='LS', reverse=False, min_n_of_stocks=10, **kw):
-        print('q:{} / reverse:{}'.format(q, reverse))
+        return x
 
+    def normalize(self):
+        self.data['value_'] = self.data.groupby('eval_d')['value_'].transform(lambda x: (x - np.mean(x)) / np.std(x))
+
+    def winsorize(self, p, pct_winsor=False):
+        if p > 0:
+            winsor_ftn = partial(Strategy._winsor_func, p=p, pct_winsor=pct_winsor)
+            self.data['value_'] = self.data.groupby('eval_d')['value_'].transform(winsor_ftn)
+        else:
+            print('p(winsorize) should be positive value.')
+            # if pct_winsor is False:
+            #     self.data.loc[self.data['value_'] > winsorize, 'value_'] = winsorize
+            #     self.data.loc[self.data['value_'] < -winsorize, 'value_'] = -winsorize
+            # else:
+
+    @staticmethod
+    def _make_order_per_sch(x, q, wgt_method, long_short, reverse, q_type='rank', **kwargs):
         if q >= 0.5:
+            print('q should be lower than 0.5. q will be set 0.499')
             q = 0.499
         elif q <= 0:
-            q = 0.
+            print('q should be positive. q will be set 0.01')
+            q = 0.01
 
-        q_high = int((1. - q) * 100.)
-        q_low = int(q * 100.)
+        if q_type.lower() in ['rank']:
+            idx_high = int(np.ceil(len(x) * (1.-q)))
+            idx_low = int(len(x) * q)
+            cond_high = (x >= sorted(x)[idx_high])
+            cond_low = (x < sorted(x)[idx_low])
+        else:
+            q_high, q_low = (1. - q) * 100., q * 100.
+            cond_high = (x >= np.percentile(x, q_high))
+            cond_low = (x < np.percentile(x, q_low))
 
-        sch_skipped = list()
-        wgt_table = pd.DataFrame(columns=['eval_d', 'infocode', 'wgt'])
-        for sch_ in self.sch:
-            cond_sch = np.array(self.data['eval_d'] == sch_)
-            cond_high = np.array(self.data[cond_sch]['value_']
-                                 >= np.percentile(self.data[cond_sch]['value_'], q_high)+0.0001)
-            cond_low = np.array(self.data[cond_sch]['value_']
-                                <= np.percentile(self.data[cond_sch]['value_'], q_low)-0.0001)
-            # cond_high = cond_low 인 종목의 경우 primary key 에러 발생(L에도 포함, S에도 포함. 0.0001로 방지)
+        if reverse is False:
+            cond_long, cond_short = cond_high, cond_low
+        else:
+            cond_long, cond_short = cond_low, cond_high
 
-            if reverse is False:
-                cond_long = cond_high
-                cond_short = cond_low
-            else:
-                cond_long = cond_low
-                cond_short = cond_high
+        if wgt_method.lower() in ['eq', 'ew', 'equal']:
+            wgt_long = 1. / sum(cond_long)
+            wgt_short = 1. / sum(cond_short)
 
-            # 포트폴리오 구성 최소 종목수
-            if sum(cond_long) < min_n_of_stocks or sum(cond_short) < min_n_of_stocks:
-                sch_skipped.append(sch_)
-                continue
+        wgt = np.zeros_like(x, dtype=float)
+        if long_short.lower() in ['ls', 'l']:
+            wgt[cond_high] = wgt_long
+            pass
+        if long_short.lower() in ['ls', 's']:
+            wgt[cond_low] = -wgt_short
+            pass
 
-            # weighting scheme 변경
-            if weight.lower() in ['equal', 'eq', 'ew']:
-                wgt_long = 1. / sum(cond_long)
-                wgt_short = 1. / sum(cond_short)
-            # elif weight.lower() in ['rank']:
-            #     pass
-            # elif weight.lower() in ['value', 'vw']:
-            #     pass
-            # elif weight.lower() in ['volatility', 'vol']:
-            #     pass
-            else:
-                wgt_long = 1. / sum(cond_long)
-                wgt_short = 1. / sum(cond_short)
+        return wgt
 
-            # Long portfolio
-            if long_short.lower() in ['ls', 'l']:
-                wgt_table_long = pd.DataFrame(data={
-                    'eval_d': self.data[cond_sch][cond_long]['eval_d'],
-                    'infocode': self.data[cond_sch][cond_long]['infocode'],
-                    'wgt': wgt_long})
-                wgt_table = pd.concat([wgt_table, wgt_table_long], ignore_index=True)
-
-            # Short portfolio
-            if long_short.lower() in ['ls', 's']:
-                wgt_table_short = pd.DataFrame(data={
-                    'eval_d': self.data[cond_sch][cond_short]['eval_d'],
-                    'infocode': self.data[cond_sch][cond_short]['infocode'],
-                    'wgt': -wgt_short})
-                wgt_table = pd.concat([wgt_table, wgt_table_short], ignore_index=True)
-
+    def make_order_table(self, q=0.3, wgt_method='equal', long_short='LS', reverse=False, q_type='rank', **kwargs):
+        print('q:{} / q_type:{} / reverse:{}'.format(q, q_type, reverse))
+        make_order_ftn = partial(Strategy._make_order_per_sch,
+                                 q=q,
+                                 wgt_method=wgt_method,
+                                 long_short=long_short,
+                                 reverse=reverse,
+                                 q_type=q_type, **kwargs)
+        wgt_table = pd.DataFrame(columns=['wgt'])
+        wgt_table['wgt'] = self.data.groupby('eval_d')['value_'].transform(make_order_ftn)
+        wgt_table = wgt_table.reset_index()['eval_d', 'infocode', 'wgt']
         return wgt_table
 
 
 class ModelDefault:
-    def __init__(self, univ=None, sch=None, **kwargs):
+    def __init__(self, univ=None, sch=None):
         if univ is None:
             self.univ = Universe(**{'equity': ['kr_all']})
         else:
@@ -114,15 +126,19 @@ class ModelDefault:
         self.equity_obj.initialize()
         self.pipe = Pipeline()
 
-    def set_pipe(self, pipe_nm, item_dict, store_result=False, overwrite_pipe=False, chunksize=1000, **kwargs):
-        is_loaded = self.pipe.load(name=pipe_nm, overwrite_pipe=overwrite_pipe)
+    def set_pipe(self, name, item, mode='load_or_run', chunksize=10000, table_owner=None):
+        if mode == 'run':
+            self.pipe.add(name, universe=self.univ, item=item)
+            self.pipe.run(name, sch_obj=self.sch, mode=mode, chunksize=chunksize)
+            return None
+        is_loaded = self.pipe.load(name, table_owner=table_owner)
         if not is_loaded:
-            self.pipe.add(pipe_nm, universe=self.univ, item=item_dict)
-            self.pipe.run(pipe_nm, schedule=self.sch, store_result=store_result, chunksize=chunksize)
+            self.pipe.add(name, universe=self.univ, item=item)
+            self.pipe.run(name, sch_obj=self.sch, mode=mode, chunksize=chunksize)
 
     def set_pipe_by_info(self, **factor_info):
-        pipe_nm = factor_info['name']
-        item_dict = factor_info['item']
+        pipe_nm = factor_info.pop('name')
+        item_dict = factor_info.pop('item')
         self.set_pipe(pipe_nm, item_dict, **factor_info)
 
     def factor_write(self, winsorize=0.5, **factor_info):
@@ -131,7 +147,7 @@ class ModelDefault:
         factor_nm = list(factor_info['item'])[0]
         data = self.pipe.get_item(pipe_nm, item_id=factor_nm)
 
-        my_model = Model(data)
+        my_model = Strategy(data)
         my_model.normalize(winsorize=winsorize)
         order_table = my_model.make_order_table(**factor_info)
         testing = Testing()

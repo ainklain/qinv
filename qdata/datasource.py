@@ -30,7 +30,7 @@ class IO:
         # table_structure: {'columns': list of tuples for columns (col_name, col_type), 'pk':list of pk}
         table_struct_code = ""
         for (col_nm, col_type) in table_structure['columns']:
-            table_struct_code += col_nm + " " + col_type + "\n"
+            table_struct_code += col_nm + " " + col_type + ",\n"
         if 'pk' in table_structure.keys():
             table_struct_code += "primary key(" + ", ".join(table_structure['pk']) + ")"
 
@@ -155,25 +155,30 @@ class PipeIO(IO):
             return False
         else:
             stored = self.pipe_info.loc[self.pipe_info['table_id'] == table_id, 'code_str']
-            code_dict = eval(stored.values[0][0].replace("?", "'"))
+            code_dict = eval(stored.values[0].replace("?", "'"))
             decoded_dict = Helper.bulk_decode(**code_dict)
 
-            self.pipeline[name] = PipeInfo(table_id=table_id, **decoded_dict)
+            self.pipeline[name] = PipeInfo(table_id=table_id, added_item=dict(), **decoded_dict)
             print("[PipeIO][load] Successfully loaded")
             return True
 
-    def _insert_to_db(self, pipe_dict, sch_obj, chunksize):
+    def _insert_item_to_db(self, pipe_dict, sch_obj, chunksize, update=False):
+        if update is True:
+            items = pipe_dict.added_item
+        else:
+            items = pipe_dict.item
+
         # equities/commodities/fx 전략 구분하여 적용 위함
         for asset_cls in pipe_dict.universe.univ_dict.keys():
             univ_str = '&'.join(pipe_dict.universe[asset_cls])
             schedule_str = sch_obj.code.replace("'", "''")
 
-            for item_key in pipe_dict.item.keys():
-                if pipe_dict.item[item_key].asset_cls != asset_cls:
+            for item_key in items.keys():
+                if items[item_key].asset_cls != asset_cls:
                     continue
 
-                item_str = '&'.join(pipe_dict.item[item_key].item_set)
-                item_expr = pipe_dict.item[item_key].expr
+                item_str = '&'.join(items[item_key].item_set)
+                item_expr = items[item_key].expr
                 sql_code = """exec qinv.dbo.SP_Run_EquityItems '{}', '{}', '{}', '{}', '{}', '{}', {}""".format(
                     univ_str, item_str, item_expr, schedule_str, pipe_dict.table_id, item_key, chunksize)
                 pipe_dict.add_attr(sql_code=sql_code)
@@ -183,9 +188,9 @@ class PipeIO(IO):
                 self.sqlm.db_execute(sql_code)
                 et = time.time()
 
-        print("Successfully Stored. [{0:.2f} sec]".format(et-st))
+                print("Successfully Stored. [{0:.2f} sec]".format(et-st))
 
-    def store(self, name, sch_obj, chunksize=1000):
+    def store(self, name, sch_obj, chunksize=10000):
         # ENCODING
         pipe_dict = self.pipeline[name]
         enc_dict = Helper.bulk_encode(
@@ -198,9 +203,9 @@ class PipeIO(IO):
 
         # SAVE INFORMATION ABOUT PIPE
         self.sqlm.db_execute("""        
-        DELETE FROM QPIPE..PIPE_INFORMATION WHERE TABLE_ID = '{table_id}' AND SCHEDULE_STR = '{sch}'
+        DELETE FROM QPIPE..PIPE_INFORMATION WHERE TABLE_ID = '{table_id}'
         INSERT INTO qpipe..pipe_information VALUES ('{table_id}','{sch}','{code_str}', getdate())
-        """.format(table_id=self.pipeline[name].table_id, code_str=enc_dict, sch=sch_str))
+        """.format(table_id=pipe_dict.table_id, code_str=enc_dict, sch=sch_str))
 
         self._initialize_info()
 
@@ -210,13 +215,12 @@ class PipeIO(IO):
                                        ('eval_d', 'date'),
                                        ('value_', 'float')],
                            'pk': ['item_nm', 'infocode', 'eval_d']}
-        self.create_table(table_id=self.pipeline[name].table_id, table_structure=table_structure)
+        self.create_table(table_id=pipe_dict.table_id, table_structure=table_structure)
 
-        self._insert_to_db(pipe_dict, sch_obj, chunksize)
+        self._insert_item_to_db(pipe_dict, sch_obj, chunksize)
         # equities/commodities/fx 전략 구분하여 적용 위함
 
-
-
+        pipe_dict.add_attr(schedule=sch_obj)
 
     def get_item(self, name, **kwargs):
         item_id = kwargs.get('item_id', None)

@@ -35,6 +35,7 @@ class Config:
         self.checkpoint_dir = os.path.join(ROOT_DIR, "experiments", self.model_name, "checkpoint")
         self.data_file_dir = os.path.join(ROOT_DIR, "data", self.data_file_name)
 
+
 def main():
     # capture the config path from the run arguments
     # then process the json configuration file
@@ -73,7 +74,7 @@ def main():
         trainer = FundaTrainer(sess, model, data, config, logger)
 
     # load model if exists
-    model.load(sess)
+    # model.load(sess)
     # here you train your model
     trainer.train()
 

@@ -2,7 +2,7 @@ from qinv.schedule import Schedule
 from qinv.universe import Universe
 from qinv.asset import Equity
 from qdata.pipeline import Pipeline
-from qinv.model import Model, Testing
+from qinv.model import Strategy, Testing
 
 equity_obj = Equity()
 equity_obj.initialize()
@@ -27,13 +27,16 @@ pipe.add('pipe_be', universe=univ, item={'be': be})
 pipe.add('pipe_bm', universe=univ, item={'bm': bm})
 pipe.load(name='pipe_equity')
 pipe.add_item('pipe_equity', {'gpa': gpa})
+pipe.run('pipe_equity', mode='update')
 
-sch_obj = Schedule('2000-01-01', '2018-01-01', type_='end', freq_='m')
+
+sch_obj = Schedule('2016-01-01', '2018-01-01', type_='end', freq_='m')
+pipe.run('pipe_equity', sch_obj=sch_obj, mode='store', chunksize=100)
 # DB에 같은 테이블 있어도 강제로 저장옵션
 # pipe.run_pipeline('pipe_equity', schedule=sch_obj, store_db=True)
 # pipe.run_pipeline('pipe_gpa', schedule=sch_obj, store_db=True)
-# pipe.run_pipeline('pipe_be', schedule=sch_obj, store_db=True, chunksize=1000)
-# pipe.run_pipeline('pipe_bm', schedule=sch_obj, store_db=True, chunksize=1000)
+# pipe.run_pipeline('pipe_be', schedule=sch_obj, store_db=True, chunksize=10000)
+# pipe.run_pipeline('pipe_bm', schedule=sch_obj, store_db=True, chunksize=10000)
 # pipe.get_code('pipe_equity', schedule=sch_obj)
 # pipe load
 pipe = Pipeline('pipe_equity')
@@ -45,7 +48,7 @@ pipe.run('pipe_equity')
 data_bm = pipe.get_item('pipe_equity', item_id='bm')
 # data_mktcap = pipe.get_item('pipe_equity2', 'mktcap')
 
-x = Model(data_bm)
+x = Strategy(data_bm)
 x.normalize(winsorize=0.5)
 order_table = x.make_order_table(min_n_of_stocks=2)
 testing = Testing()

@@ -22,24 +22,27 @@ class Pipeline(PipeIO):
     def add(self, name, **kwargs):
         self.pipeline[name] = PipeInfo(**kwargs)
         self.pipeline[name].add_attr(table_id=get_table_id(name))
+        self.pipeline[name].add_attr(added_item=dict())
 
-    def add_item(self, name, added_dict):
-        self.added_item.update(added_dict)
-        self.pipeline[name].item.update(added_dict)
+    def add_item(self, name, added_dict, sudo=False):
+        for key in added_dict.keys():
+            if sudo is False and key in self.pipeline[name].item.keys():
+                print('[add_item] already exists in items')
+                continue
+            self.pipeline[name].added_item.update({key: added_dict[key]})
 
-    def update(self, name, sch_obj=None, chunksize=1000):
+    def update(self, name, sch_obj, chunksize=10000):
         pipe_dict = self.pipeline[name]
-        if not hasattr(self.pipeline[name], 'schedule'):
-            pipe_dict.add_attr(schedule=sch_obj)
+        for key in pipe_dict.added_item:
+            pipe_dict.item.update({key: pipe_dict.added_item[key]})
 
-        pipe_dict.item = self.add_item
-        self._insert_to_db(pipe_dict, sch_obj, chunksize)
-        self.add_item = dict()
+        self._insert_item_to_db(pipe_dict, sch_obj, chunksize, update=True)
+        pipe_dict.added_item.clear()
 
-    def run(self, name, schedule=None, chunksize=1000, mode='load_or_run'):
+    def run(self, name, sch_obj=None, chunksize=10000, mode='load_or_run'):
         """
         :param name: name of pipeline
-        :param schedule: schedule object if needed
+        :param sch_obj: schedule object if needed
         :param chunksize: chunk size to store data
         :param mode:    'load': if fail to load, return False
                          'load_or_run': if fail to load, run store
@@ -53,15 +56,21 @@ class Pipeline(PipeIO):
                 return True
 
         if mode in ['load_or_run', 'run', 'store', 'overwrite']:
-            if schedule is None:
+            if sch_obj is None:
                 print('Schedule should be set.')
                 return False
-            self.store(name=name, sch_obj=schedule, chunksize=chunksize)
+            self.store(name=name, sch_obj=sch_obj, chunksize=chunksize)
             return True
 
         if mode in ['update']:
-            self.update(name=name, sch_obj=schedule)
+            if hasattr(self.pipeline[name], 'schedule'):
+                sch_obj = self.pipeline[name].schedule
+            elif sch_obj is None:
+                print('[Pipeline][update] Failed. Plz set sch_obj.')
+                return False
 
+            self.update(name=name, sch_obj=sch_obj, chunksize=chunksize)
+            return True
 
         return False
 

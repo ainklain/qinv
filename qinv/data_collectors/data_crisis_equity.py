@@ -12,93 +12,45 @@ import pickle
 from functools import partial
 
 
-
 class TFModel(ModelDefault):
     def __init__(self, univ=None, sch=None, **kwargs):
         super().__init__(univ, sch, **kwargs)
 
-    def set_data(self, name='cnn_test'):
+    def set_data(self, name='cnn_test', mode='load_or_run'):
+        item_dict = dict()
         if name == 'cnn_test':
-            mktcap = self.equity_obj['mktcap']
-            be = self.equity_obj['be']
-            bm = be / mktcap
+            item_list = ['close_', 'close_adj', 'mktcap', 'be', 'gpa']
 
-            gpa = self.equity_obj['gpa']
-            close_ = self.equity_obj['close_']
-            close_adj = self.equity_obj['close_adj']
-
-            factor_info = {'name': name,
-                           'item': {'mktcap': mktcap,
-                                    'bm': bm,
-                                    'gpa': gpa,
-                                    'close_': close_,
-                                    'close_adj': close_adj},
-                           'store_result': True,
-                           'overwrite_pipe': True,
-                           }
+            for item in item_list:
+                item_dict[item] = self.equity_obj[item]
+            item_dict['bm'] = item_dict['be'] / item_dict['mktcap']
 
         elif name == 'crisis_data':
-            item_list = ['close_', 'close_adj', 'mktcap'
+            item_list = ['close_', 'close_adj', 'mktcap',
                          'be', 'netsales', 'cogs', 'grossincome', 'netincome',
                          'depreciation', 'capitalexp', 'workingcap', 'totasset',
                          'totdebt', 'commsharesout', 'gpa', 'gmar', 'roa', 'roe']
 
-            item_dict = dict()
             for item in item_list:
                 item_dict[item] = self.equity_obj[item]
 
-            factor_info = {'name': name,
-                           'item': item_dict,
-                           'mode': 'load_or_run',
-                           'chunksize': 15000,}
-
         elif name == 'fundamental_data':
-            close_ = self.equity_obj['close_']
-            close_adj = self.equity_obj['close_adj']
-            mktcap = self.equity_obj['mktcap']
 
-            netsales = self.equity_obj['netsales']
-            cogs = self.equity_obj['cogs']
-            sellinggeneralexp = self.equity_obj['sellinggeneralexp']
-            opincome = self.equity_obj['opincome']
-            netincome = self.equity_obj['netincome']
-            stinvest = self.equity_obj['stinvest']
-            receivables = self.equity_obj['receivables']
-            inventories = self.equity_obj['inventories']
-            othercurasset = self.equity_obj['othercurasset']
-            properties = self.equity_obj['properties']
-            otherasset = self.equity_obj['otherasset']
-            curdebt = self.equity_obj['curdebt']
-            accpayable = self.equity_obj['accpayable']
-            incometaxespayable = self.equity_obj['incometaxespayable']
-            othercurdebt = self.equity_obj['othercurdebt']
-            totdebt = self.equity_obj['totdebt']
+            item_list = ['close_', 'close_adj', 'mktcap',
+                         'netincome', 'netsales', 'cogs', 'sellinggeneralexp', 'opincome',
+                         'stinvest', 'receivables', 'inventories', 'othercurasset', 'properties',
+                         'otherasset', 'curdebt', 'accpayable', 'incometaxespayable', 'othercurdebt',
+                         'totdebt']
 
-            factor_info = {'name': name,
-                           'item': {'close_': close_,
-                                    'close_adj': close_adj,
-                                    'mktcap': mktcap,
-                                    'netsales': netsales,
-                                    'cogs': cogs,
-                                    'sellinggeneralexp': sellinggeneralexp,
-                                    'opincome': opincome,
-                                    'netincome': netincome,
-                                    'stinvest': stinvest,
-                                    'receivables': receivables,
-                                    'inventories': inventories,
-                                    'othercurasset': othercurasset,
-                                    'properties': properties,
-                                    'otherasset': otherasset,
-                                    'curdebt': curdebt,
-                                    'accpayable': accpayable,
-                                    'incometaxespayable': incometaxespayable,
-                                    'othercurdebt': othercurdebt,
-                                    'totdebt': totdebt,},
-                           'mode': 'load_or_run',
-                           'chunksize': 15000,}
+            for item in item_list:
+                item_dict[item] = self.equity_obj[item]
+
+        factor_info = {'name': name,
+                       'item': item_dict,
+                       'mode': mode,
+                       'chunksize': 15000, }
 
         self.set_pipe_by_info(**factor_info)
-
 
 
 # (NetIncome + Depreciation - CapitalExp - (WorkingCap - WorkingCap_1)) / totAsset
@@ -167,7 +119,7 @@ close_adj = m.pipe.get_item(data_name, item_id='close_adj')
 close_adj.drop(labels='item_nm', axis=1, inplace=True)
 close_adj.set_index(index_columns, inplace=True)
 
-mktcap = m.pipe.get_item('fundamental_data', item_id='mktcap')
+mktcap = m.pipe.get_item(data_name, item_id='mktcap')
 mktcap.drop(labels='item_nm', axis=1, inplace=True)
 mktcap.set_index(index_columns, inplace=True)
 
@@ -216,6 +168,13 @@ for i in range(48, len(sch)-12):
 
     fundamentals_t = pd.DataFrame(index=univ_t.index)
     fundamentals_t_next = pd.DataFrame(index=univ_t_next.index)
+    # mktcap_t = pd.merge(univ_t, mktcap.loc[mktcap.index.isin([t], level='eval_d')], how='left', on=index_columns)
+    # for name in fundamental_list:
+    #     fundamentals_t[name] = pd.merge(univ_t, fundamentals[name], how='left', on=index_columns).values \
+    #                            / mktcap_t.fillna(method='bfill').values
+    #     fundamentals_t_next[name] = pd.merge(univ_t_next, fundamentals[name], how='left', on=index_columns) \
+    #                                 / pd.merge(univ_t_next, mktcap_t.dropna(), how='left', on='infocode').values
+
     mktcap_t = pd.merge(univ_t, mktcap.loc[mktcap.index.isin([t], level='eval_d')]
                         , how='left', on=index_columns).fillna(method='bfill')
     for name in fundamental_list:

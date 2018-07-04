@@ -47,7 +47,7 @@ class SqlManager:
 
     def db_read(self, sql, chunksize=None):
         self.db_connect()
-        results = read_sql(sql, self.conn, chunksize=None)
+        results = read_sql(sql, self.conn, chunksize=chunksize)
         self.db_close()
         return results
 
