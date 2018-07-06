@@ -8,6 +8,11 @@ class FundaTrainer(BaseTrainer):
     def __init__(self, sess, model, data, config, logger):
         super().__init__(sess, model, data, config, logger)
         self.build_trainer()
+        self.init_saver()
+
+    def init_saver(self):
+        # here you initialize the tensorflow saver that will be used in saving the checkpoints.
+        self.saver = tf.train.Saver(max_to_keep=self.config.max_to_keep)
 
     def build_trainer(self):
         inputs, labels = self.data.next_batch
@@ -34,10 +39,11 @@ class FundaTrainer(BaseTrainer):
 
         self.merged = tf.summary.merge_all()
         # self.logger.train_summary_writer.add_graph(self.sess.graph)
-        self.logger.initialize()
         # self.sess.run(tf.global_variables_initializer())
         init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
         self.sess.run(init)
+
+        self.logger.initialize()
 
     def train_epoch(self):
         self.sess.run(self.data.train_init_op)
@@ -57,7 +63,7 @@ class FundaTrainer(BaseTrainer):
         #     'loss': loss_avg,
         # }
         # self.logger.summarize(cur_iter, summaries_dict=summaries_dict)
-        self.model.save(self.sess)
+        self.save(self.sess)
 
         return loss_avg
 
@@ -65,9 +71,8 @@ class FundaTrainer(BaseTrainer):
         _, loss, summary = self.sess.run([self.optimizer, self.loss, self.merged])
         return loss, summary
 
-    def predict(self, x_data, is_training=True):
-        if is_training is True:
-            self.sess.run(self.data.test_init_op, feed_dict={x_test: x_data})
+    def predict(self, x_data):
+        self.sess.run(self.data.test_init_op, feed_dict={x_test: x_data})
 
         # x_data = np.random.random([1, self.config.n_input])
         predict_value = self.sess.run([self.model.predicted])

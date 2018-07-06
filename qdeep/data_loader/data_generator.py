@@ -47,14 +47,12 @@ class DataGenerator:
                 # .map(lambda z: tf.one_hot(tf.cast(z, tf.int32), 2))
             valid_dataset = tf.data.Dataset.zip((valid_data, valid_label)).shuffle(10000).repeat().batch(self.config.batch_size)
 
-            x_test = tf.placeholder(tf.float64, [None, n_input])
-            y_test = tf.placeholder(tf.float64, [None, n_output])
+            x_test = tf.placeholder(tf.float64, [None, n_input], name='x_test')
+            y_test = tf.placeholder(tf.float64, [None, n_output], name='y_test')
             test_data = tf.data.Dataset.from_tensor_slices(x_test)
             test_label = tf.data.Dataset.from_tensor_slices(y_test)
             test_dataset = tf.data.Dataset.zip((test_data, test_label)).batch(1)
 
-            x_gen = tf.placeholder(tf.float64, [None, n_input])
-            x_data = tf.contrib.data.
 
             # iterator = train_dataset.make_initializable_iterator()
             iterator = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)

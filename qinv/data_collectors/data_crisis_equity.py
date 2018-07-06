@@ -222,7 +222,6 @@ for i in range(48, len(sch)-12):
         fundamental_label = np.concatenate([fundamental_label, label_t])
 
 
-
 f = open('data/crisis.pkl', 'wb')
 pickle.dump({'data': fundamental_data, 'label': fundamental_label}, f)
 

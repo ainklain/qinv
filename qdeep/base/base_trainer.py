@@ -1,4 +1,5 @@
 import tensorflow as tf
+import os
 
 
 class BaseTrainer:
@@ -43,4 +44,25 @@ class BaseTrainer:
         - run the tensorflow session
         - return any metrics you need to summarize
         """
+        raise NotImplementedError
+
+    # save function that saves the checkpoint in the path defined in the config file
+    def save(self, sess):
+        print("Saving model...")
+        self.saver.save(sess,
+                        os.path.join(self.config.checkpoint_dir, self.config.model_name),
+                        self.model.global_step_tensor)
+        print("Model saved")
+
+    # load latest checkpoint from the experiment path defined in the config file
+    def load(self, sess):
+        latest_checkpoint = tf.train.latest_checkpoint(self.config.checkpoint_dir)
+        if latest_checkpoint:
+            print("Loading model checkpoint {} ...\n".format(latest_checkpoint))
+            self.saver.restore(sess, latest_checkpoint)
+            print("Model loaded")
+
+    def init_saver(self):
+        # just copy the following line in your child class
+        # self.saver = tf.train.Saver(max_to_keep=self.config.max_to_keep)
         raise NotImplementedError
