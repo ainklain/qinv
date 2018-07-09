@@ -20,11 +20,21 @@ class DataGenerator:
         self.make_dataset(config.data_file_dir)
 
     def make_dataset(self, file_dir):
-        # file_dir = 'D:\\DeepInvest\\Code\\DeepInv\\data\\fundamentals.pkl'
+        # file_dir = 'D:\\DeepInvest\\Code\\DeepInv\\data\\fundamentals_adj_dict.pkl'
         f = open(file_dir, 'rb')
-        data_pickle = pickle.load(f)
-        data_ = data_pickle['data']
-        label_ = data_pickle['label']
+        data_pkl = pickle.load(f)
+        # data_ = data_pkl['data']
+        # label_ = data_pkl['label']
+
+        data_ = None
+        label_ = None
+        for sch in data_pkl.keys():
+            if data_ is None:
+                data_ = data_pkl[sch]['data'].values
+                label_ = data_pkl[sch]['label'].values
+            else:
+                data_ = np.concatenate([data_, data_pkl[sch]['data']])
+                label_ = np.concatenate([label_, data_pkl[sch]['label']])
 
         n_input = data_.shape[1]
         n_output = label_.shape[1]
@@ -32,9 +42,7 @@ class DataGenerator:
         assert self.config.n_input == n_input, 'config.n_input is not same as that of data_file'
         assert self.config.n_output == n_output, 'config.n_output is not same as that of data_file'
 
-
         with tf.variable_scope('data'):
-
             train_split = int(len(data_) * 0.8)
             # train_split = 1000
             train_data = tf.data.Dataset.from_tensor_slices(data_[:train_split])
@@ -52,7 +60,6 @@ class DataGenerator:
             test_data = tf.data.Dataset.from_tensor_slices(x_test)
             test_label = tf.data.Dataset.from_tensor_slices(y_test)
             test_dataset = tf.data.Dataset.zip((test_data, test_label)).batch(1)
-
 
             # iterator = train_dataset.make_initializable_iterator()
             iterator = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)
