@@ -37,7 +37,7 @@ class TFModel(ModelDefault):
         elif name == 'fundamental_data':
 
             item_list = ['close_', 'close_adj', 'mktcap',
-                         'netincome', 'netsales', 'cogs', 'sellinggeneralexp', 'opincome',
+                         'be', 'netincome', 'netsales', 'cogs', 'sellinggeneralexp', 'opincome',
                          'stinvest', 'receivables', 'inventories', 'othercurasset', 'properties',
                          'otherasset', 'curdebt', 'accpayable', 'incometaxespayable', 'othercurdebt',
                          'totdebt']
@@ -78,6 +78,7 @@ m = TFModel(univ=Universe(**{'equity': ['us_all']}),
             sch=Schedule('1985-01-01', '2016-12-31', type_='end', freq_='m'))
 
 data_name = 'crisis_data'
+# data_name = 'fundamental_data'
 # m.set_data(data_name)
 m.pipe.load(data_name)
 # m.pipe.add_item(data_name, {

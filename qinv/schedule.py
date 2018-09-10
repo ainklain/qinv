@@ -53,7 +53,6 @@ class Schedule:
             if type_ in (end | start) : freq_ ('y','q','m','w','d')
                     (spec)        : days ([2, 3, ...]   months if needed)
                         (interval)    : freq_, interval (integer)
-
         """
         key_list = [i.lower() for i in kwargs.keys()]
         if 'begin_d' in key_list:

@@ -1,28 +1,15 @@
 
-from qinv.asset import Equity
 
-from qinv import settings
-
-
-class UnivEquity(Equity):
-    def __init__(self):
-        super().__init__()
+# from qdata.io import IO
 
 
 
-
-
-
-
-
-
-class Universe:
+class Universe_tbd:
     """
         투자(전략만들기)하려는 유니버스를 관리해주는 클래스
         add_univ를 이용하여 DB에 저장되어 있는 universe 명을 추가
         투자 asset class별로 따로 관리하며 같은 asset에 대해서는 리스트로 관리
     """
-
     def __init__(self, **kwargs):
         self.univ_dict = dict()
         for key in kwargs.keys():

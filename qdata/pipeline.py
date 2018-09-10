@@ -1,4 +1,4 @@
-from qdata.datasource import get_table_id, PipeIO, PipeInfo
+from qdata.io import get_table_id, PipeIO, PipeInfo
 
 
 

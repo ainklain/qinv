@@ -1,15 +1,14 @@
 from qdata.dbmanager import SqlManager
 from qinv import settings
+from qdata.io import AssetIO
 
 
-class Asset:
+class Asset(AssetIO):
     def __init__(self, asset_cls):
+        super().__init__()
         self.asset_cls = asset_cls
         self.item_dict = settings.item_dict.get(self.asset_cls)
         self.is_initialize = False
-
-    def initialize(self):
-        raise NotImplementedError
 
     def get_asset_cls(self):
         return self.asset_cls
@@ -38,17 +37,11 @@ class Asset:
 class Equity(Asset):
     def __init__(self):
         super().__init__('equity')
+        self.initialize()
 
     def initialize(self):
-        sqlm = SqlManager()
-        if self.item_dict['financial'] is None:
-            sql_init_equity = 'select factor_nm from qinv..equitypitfinfactormstr'
-            df_temp = sqlm.db_read(sql_init_equity)
-            self.item_dict['financial'] = [i.lower() for i in df_temp.factor_nm]
-
-        if self.item_dict['fc'] is None:
-            pass
-
+        self._item_dict_initialize('financial', 'select factor_nm from qinv..equitypitfinfactormstr')
+        self._item_dict_initialize('fc', 'select fc_nm from qinv..EquityCharacterMstr')
         self.is_initialize = True
 
     def __repr__(self):
@@ -78,6 +71,7 @@ class Commodity(Asset):
 
     def initialize(self):
         pass
+
 
 class Fx(Asset):
     def __init__(self):

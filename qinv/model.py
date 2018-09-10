@@ -2,12 +2,59 @@ import pandas as pd
 import numpy as np
 import time
 from functools import partial
-from qdata.datasource import TestingIO
+from qdata.io import TestingIO
 from qinv.schedule import Schedule
-from qinv.universe import Universe
+# from qinv.universe import Universe
 from qinv.asset import Equity
 from qdata.pipeline import Pipeline
 __version__ = '1.0.0'
+
+
+
+class ModelDefault_tbd:
+    def __init__(self, univ=None, sch=None):
+        if univ is None:
+            self.univ = Universe(**{'equity': ['kr_all']})
+        else:
+            self.univ = univ
+        if sch is None:
+            self.sch = Schedule('2000-01-01', '2016-01-01', type_='end', freq_='m')
+        else:
+            self.sch = sch
+
+        self.equity_obj = Equity()
+        self.equity_obj.initialize()
+        self.pipe = Pipeline()
+
+    def set_pipe(self, name, item, mode='load_or_run', chunksize=10000, table_owner=None):
+        if mode == 'run':
+            self.pipe.add(name, universe=self.univ, item=item)
+            self.pipe.run(name, sch_obj=self.sch, mode=mode, chunksize=chunksize)
+            return None
+        is_loaded = self.pipe.load(name, table_owner=table_owner)
+        if not is_loaded:
+            self.pipe.add(name, universe=self.univ, item=item)
+            self.pipe.run(name, sch_obj=self.sch, mode=mode, chunksize=chunksize)
+
+    def set_pipe_by_info(self, **factor_info):
+        pipe_nm = factor_info.pop('name')
+        item_dict = factor_info.pop('item')
+        self.set_pipe(pipe_nm, item_dict, **factor_info)
+
+    def factor_write(self, winsorize=0.5, **factor_info):
+        pipe_nm = factor_info['name']
+        self.set_pipe(pipe_nm, factor_info['item'], **factor_info)
+        factor_nm = list(factor_info['item'])[0]
+        data = self.pipe.get_item(pipe_nm, item_id=factor_nm)
+
+        my_model = Strategy(data)
+        my_model.normalize(winsorize=winsorize)
+        order_table = my_model.make_order_table(**factor_info)
+        testing = Testing()
+        result_bm_ls = testing.backtest(order_table)
+
+        result_bm_ls.to_csv(r'txt//{}.csv'.format(factor_info['name']), header=True, index=None, sep=',', mode='w')
+        return result_bm_ls
 
 
 class Strategy:
@@ -24,12 +71,12 @@ class Strategy:
         :param data: index: (eval_d & infocode) / data: value_ 로 구성된 DataFrame
         """
         data.columns = pd.Index(['value_'])
-        self.sch = sorted(list(set(data.index.get_level_values('eval_d'))))
+        self.sch = sorted(list(data.index.get_level_values('eval_d').unique()))
         # self.sch = sorted(list(set(data['eval_d'])))
         self.data = data[~data['value_'].isna()]
 
     @staticmethod
-    def _winsor_func(x, p, pct_winsor=False):
+    def _winsor_func(x, p, pct_winsor):
         # p: percent value if pct_winsor is True,
         #    absolute value if pct_winsor is False
 
@@ -54,10 +101,6 @@ class Strategy:
             self.data['value_'] = self.data.groupby('eval_d')['value_'].transform(winsor_ftn)
         else:
             print('p(winsorize) should be positive value.')
-            # if pct_winsor is False:
-            #     self.data.loc[self.data['value_'] > winsorize, 'value_'] = winsorize
-            #     self.data.loc[self.data['value_'] < -winsorize, 'value_'] = -winsorize
-            # else:
 
     @staticmethod
     def _make_order_per_sch(x, q, wgt_method, long_short, reverse, q_type='rank', **kwargs):
@@ -107,54 +150,10 @@ class Strategy:
                                  q_type=q_type, **kwargs)
         wgt_table = pd.DataFrame(columns=['wgt'])
         wgt_table['wgt'] = self.data.groupby('eval_d')['value_'].transform(make_order_ftn)
-        wgt_table = wgt_table.reset_index()['eval_d', 'infocode', 'wgt']
+        wgt_table = wgt_table.reset_index(['eval_d', 'infocode'])
         return wgt_table
 
 
-class ModelDefault:
-    def __init__(self, univ=None, sch=None):
-        if univ is None:
-            self.univ = Universe(**{'equity': ['kr_all']})
-        else:
-            self.univ = univ
-        if sch is None:
-            self.sch = Schedule('2000-01-01', '2016-01-01', type_='end', freq_='m')
-        else:
-            self.sch = sch
-
-        self.equity_obj = Equity()
-        self.equity_obj.initialize()
-        self.pipe = Pipeline()
-
-    def set_pipe(self, name, item, mode='load_or_run', chunksize=10000, table_owner=None):
-        if mode == 'run':
-            self.pipe.add(name, universe=self.univ, item=item)
-            self.pipe.run(name, sch_obj=self.sch, mode=mode, chunksize=chunksize)
-            return None
-        is_loaded = self.pipe.load(name, table_owner=table_owner)
-        if not is_loaded:
-            self.pipe.add(name, universe=self.univ, item=item)
-            self.pipe.run(name, sch_obj=self.sch, mode=mode, chunksize=chunksize)
-
-    def set_pipe_by_info(self, **factor_info):
-        pipe_nm = factor_info.pop('name')
-        item_dict = factor_info.pop('item')
-        self.set_pipe(pipe_nm, item_dict, **factor_info)
-
-    def factor_write(self, winsorize=0.5, **factor_info):
-        pipe_nm = factor_info['name']
-        self.set_pipe(pipe_nm, factor_info['item'], **factor_info)
-        factor_nm = list(factor_info['item'])[0]
-        data = self.pipe.get_item(pipe_nm, item_id=factor_nm)
-
-        my_model = Strategy(data)
-        my_model.normalize(winsorize=winsorize)
-        order_table = my_model.make_order_table(**factor_info)
-        testing = Testing()
-        result_bm_ls = testing.backtest(order_table)
-
-        result_bm_ls.to_csv(r'txt//{}.csv'.format(factor_info['name']), header=True, index=None, sep=',', mode='w')
-        return result_bm_ls
 
 
 class Testing(TestingIO):

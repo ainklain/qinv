@@ -64,7 +64,7 @@ class SqlManager:
         for i in range(iters+1):
             cursor = self.conn.cursor()
             cursor.fast_executemany = fast_executemany
-            cursor.executemany(sql_str, df[i*1000:(i+1)*1000].as_matrix().tolist())
+            cursor.executemany(sql_str, df[i*1000:(i+1)*1000].values.tolist())
             cursor.close()
             del cursor
 
