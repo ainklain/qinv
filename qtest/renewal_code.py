@@ -1,3 +1,4 @@
+
 import numpy as np
 import pandas as pd
 from functools import partial
@@ -514,60 +515,487 @@ class Tester:
 
 
 
-env = Environment()
-dc = DataCollector(env)
-rs = dc.sqlm.db_read('select * from qinv..equityreturnseriesmonthly')
-rs_notnull = rs[~rs.y_next.isna()]
-a =rs_notnull.groupby(['eval_d'])[['0','1','2','3','4','5','6','7','8','9','10','11','12','13','14']].apply(lambda x: (x - np.mean(x[~np.isnan(x)]))/ np.std(x[~np.isnan(x)]))
-b =rs_notnull.groupby(['eval_d'])['y_next'].apply(lambda x: (x >= np.percentile(x[~np.isnan(x)], 80)) + (x <= np.percentile(x[~np.isnan(x)], 20)) * (-1))
+# env = Environment()
+# dc = DataCollector(env)
+# rs = dc.sqlm.db_read('select * from qinv..equityreturnseriesmonthly')
+# rs_notnull = rs[~rs.y_next.isna()]
+# a =rs_notnull.groupby(['eval_d'])[['0','1','2','3','4','5','6','7','8','9','10','11','12','13','14']].apply(lambda x: (x - np.mean(x[~np.isnan(x)]))/ np.std(x[~np.isnan(x)]))
+# b =rs_notnull.groupby(['eval_d'])['y_next'].apply(lambda x: (x >= np.percentile(x[~np.isnan(x)], 80)) + (x <= np.percentile(x[~np.isnan(x)], 20)) * (-1))
+#
+# # df.ix[:, colnames] = df.groupby(['eval_d']).apply(lambda x: (x - np.mean(x[~np.isnan(x)])) / np.std(x[~np.isnan(x)])).ix[:, colnames]
+#
+# data = np.array(a)
+# data[np.isnan(data)] = 0
+# label = np.concatenate([np.array((b == 1) * 1).reshape(-1, 1),
+#                         np.array((b == 0) * 1).reshape(-1, 1),
+#                         np.array((b == -1) * 1).reshape(-1, 1)], axis=1)
+#
+#
+# np.random.seed(1234)
+# shuffled = np.random.choice(data.shape[0], data.shape[0], replace=False)
+#
+# train_data = data[shuffled][:int(len(shuffled) * 0.6), :]
+# train_label = label[shuffled][:int(len(shuffled) * 0.6), :]
+#
+# valid_data = data[shuffled][int(len(shuffled) * 0.6):int(len(shuffled) * 0.8), :]
+# valid_label = label[shuffled][int(len(shuffled) * 0.6):int(len(shuffled) * 0.8), :]
+#
+# test_data = data[shuffled][int(len(shuffled) * 0.8):, :]
+# test_label = label[shuffled][int(len(shuffled) * 0.8):, :]
+#
+#
+# example_data = data[shuffled][:1000, :]
+# example_label = label[shuffled][:1000, :]
+#
+#
+# import tensorflow as tf
+# from keras.layers import Input, Dense
+# from keras.models import Model
+# import keras
+#
+# # This returns a tensor
+# inputs = Input(shape=(15,))
+#
+# # a layer instance is callable on a tensor, and returns a tensor
+#
+# x = Dense(30,
+#           kernel_initializer='glorot_normal',
+#           activation='relu')(inputs)
+# x = Dense(30,
+#           kernel_initializer='glorot_normal',
+#           activation='relu')(x)
+# predictions = Dense(3, activation='softmax')(x)
+#
+# def my_accuracy(y_true, y_pred):
+#     pred_ = tf.argmax(y_pred, 1)
+#     equality = tf.equal(pred_, tf.argmax(y_true, 1))
+#     return tf.reduce_mean(tf.cast(equality, tf.float32))
+#
+# # This creates a model that includes
+# # the Input layer and three Dense layers
+# model = Model(inputs=inputs, outputs=predictions)
+# model.compile(optimizer='adam',
+#               loss='categorical_crossentropy',
+#               metrics=['acc'])
+#
+#
+# tb_acc = keras.callbacks.TensorBoard(log_dir="./graph", histogram_freq=0, write_graph=True, write_images=True)
+# model.fit(train_data, train_label, epochs=1000, batch_size=10000, validation_data=(valid_data, valid_label),
+#           callbacks=[tb_acc])  # starts training
+# score = model.evaluate(example_data, example_label, batch_size=128)
+# model.predict(example_data)
+#
+#
+#
+#
+# import keras
+# from keras.models import Sequential
+# from keras.layers import LSTM, BatchNormalization, Dense
+# import keras.backend as K
+#
+# data_dim = 1
+# timesteps = 15
+# nb_classes = 3
+#
+# model2 = Sequential()
+# model2.add(LSTM(50,
+#                 return_sequences=True,
+#                 input_shape=(timesteps, data_dim)))
+# model2.add(BatchNormalization())
+# model2.add(LSTM(50))
+# model2.add(BatchNormalization())
+# model2.add(Dense(3, activation='softmax'))
+# model2.compile(optimizer=keras.optimizers.Adam(lr=0.0001),
+#               loss='categorical_crossentropy',
+#               metrics=['acc'])
+#
+#
+# example_data = data[shuffled][:10000, :]
+# example_data_lstm = example_data.reshape((-1, timesteps, data_dim))
+# example_label = label[shuffled][:10000, :]
+#
+# tb_acc = keras.callbacks.TensorBoard(log_dir="./graph", histogram_freq=0, write_graph=True, write_images=True)
+# model2.fit(example_data_lstm, example_label, epochs=5, batch_size=100,
+#           callbacks=[tb_acc])  # starts training
+#
+# train_data_lstm = train_data.reshape((-1, timesteps, data_dim))
+# valid_data_lstm = valid_data.reshape(-1, timesteps, data_dim)
+# tb_acc = keras.callbacks.TensorBoard(log_dir="./graph", histogram_freq=0, write_graph=True, write_images=True)
+# model2.fit(train_data_lstm, train_label, epochs=100, batch_size=2000, validation_data=(valid_data_lstm, valid_label),
+#           callbacks=[tb_acc])  # starts training
 
-# df.ix[:, colnames] = df.groupby(['eval_d']).apply(lambda x: (x - np.mean(x[~np.isnan(x)])) / np.std(x[~np.isnan(x)])).ix[:, colnames]
-
-data = np.array(a)
-data[np.isnan(data)] = 0
-label = np.concatenate([np.array((b == 1) * 1).reshape(-1, 1),
-                        np.array((b == 0) * 1).reshape(-1, 1),
-                        np.array((b == -1) * 1).reshape(-1, 1)], axis=1)
 
 
-np.random.seed(1234)
-shuffled = np.random.choice(data.shape[0], data.shape[0], replace=False)
-
-train_data = data[shuffled][:int(len(shuffled) * 0.8), :]
-train_label = label[shuffled][:int(len(shuffled) * 0.8), :]
-
-test_data = data[shuffled][int(len(shuffled) * 0.8):, :]
-test_label = label[shuffled][int(len(shuffled) * 0.8):, :]
 
 
-example_data = data[shuffled][:1000, :]
-example_label = label[shuffled][:1000, :]
 
 
-import tensorflow as tf
-from keras.layers import Input, Dense
-from keras.models import Model
 
-# This returns a tensor
-inputs = Input(shape=(15,))
 
-# a layer instance is callable on a tensor, and returns a tensor
-x = Dense(30, activation='relu')(inputs)
-x = Dense(20, activation='relu')(x)
-predictions = Dense(3, activation='softmax')(x)
 
-def my_accuracy(y_true, y_pred):
-    pred_ = tf.argmax(y_pred, 1)
-    equality = tf.equal(pred_, tf.argmax(y_true, 1))
-    return tf.reduce_mean(tf.cast(equality, tf.float32))
 
-# This creates a model that includes
-# the Input layer and three Dense layers
-model = Model(inputs=inputs, outputs=predictions)
-model.compile(optimizer='adam',
-              loss='categorical_crossentropy',
-              metrics=['acc', my_accuracy])
-model.fit(example_data, example_label, epochs=20, batch_size=30)  # starts training
-score = model.evaluate(example_data, example_label, batch_size=128)
-model.predict(example_data)
 
+
+
+
+
+
+
+
+###########
+
+#
+# import pickle
+# f = open('financialdata.pkl', 'rb')
+# fin_data = pickle.load(f)
+#
+# from keras.utils import to_categorical
+#
+#
+# env = Environment()
+# dc = DataCollector(env)
+# rs = dc.sqlm.db_read('select * from qinv..equityreturnseriesmonthly')
+# rs_notnull = rs[~rs.y_next.isna()]
+# # a =pd.merge(rs_notnull[['eval_d', 'infocode']],
+# #             rs_notnull.groupby(['eval_d'])[['0','1','2','3','4','5','6','7','8','9','10','11','12','13','14']].apply(
+# #                 lambda x: (x - np.mean(x[~np.isnan(x)]))/ np.std(x[~np.isnan(x)])),
+# #             left_index=True,
+# #             right_index=True)
+#
+# a = rs_notnull.copy()
+# a['y_port'] = rs_notnull.groupby(['eval_d'])['y_next'].apply(
+#     lambda x: (x >= np.percentile(x[~np.isnan(x)], 10)) * 1.
+#               + (x >= np.percentile(x[~np.isnan(x)], 20)) * 1.
+#               + (x >= np.percentile(x[~np.isnan(x)], 30)) * 1.
+#               + (x >= np.percentile(x[~np.isnan(x)], 40)) * 1.
+#               + (x >= np.percentile(x[~np.isnan(x)], 50)) * 1.
+#               + (x >= np.percentile(x[~np.isnan(x)], 60)) * 1.
+#               + (x >= np.percentile(x[~np.isnan(x)], 70)) * 1.
+#               + (x >= np.percentile(x[~np.isnan(x)], 80)) * 1.
+#               + (x >= np.percentile(x[~np.isnan(x)], 90)) * 1.)
+#
+# # a['y_next'] = rs_notnull.groupby(['eval_d'])['y_next'].apply(
+# #     lambda x: (x >= np.percentile(x[~np.isnan(x)], 80)) + (x <= np.percentile(x[~np.isnan(x)], 20)) * (-1))
+#
+# fc_list = ['bm','assetgrowth','roa','roe','gpa','accrual','logme','invtocap','invgrowth','invtoasset','netopasset','ns']
+# y_list = ['11','10','9','8','7','6','5','4','3','2','1','0']
+# x = pd.merge(fin_data, a, how='inner', on=['eval_d','infocode'])
+# data = x.dropna(axis=0, how='any')
+# data_f = np.array(data[fc_list])
+# # data_p = np.array(data[['14','13','12','11','10','9','8','7','6','5','4','3','2','1','0']])
+# # data_f = np.array(data[['bm','assetgrowth','gpa','accrual','logme','invtocap','invgrowth','invtoasset','netopasset','ns']])
+# data_p = np.array(data[y_list])
+# # data_label = np.array(data[['y_next']])
+# data_label = to_categorical(data[['y_port']])
+#
+# np.random.seed(1234)
+# shuffled = np.random.choice(data_label.shape[0], data_label.shape[0], replace=False)
+#
+# train_data_p = data_p[shuffled][:int(len(shuffled) * 0.6), :]
+# train_data_f = data_f[shuffled][:int(len(shuffled) * 0.6), :]
+# train_label = data_label[shuffled][:int(len(shuffled) * 0.6), :]
+#
+# valid_data_p = data_p[shuffled][int(len(shuffled) * 0.6):int(len(shuffled) * 0.8), :]
+# valid_data_f = data_f[shuffled][int(len(shuffled) * 0.6):int(len(shuffled) * 0.8), :]
+# valid_label = data_label[shuffled][int(len(shuffled) * 0.6):int(len(shuffled) * 0.8), :]
+#
+# test_data_p = data_p[shuffled][int(len(shuffled) * 0.8):, :]
+# test_data_f = data_f[shuffled][int(len(shuffled) * 0.8):, :]
+# test_label = data_label[shuffled][int(len(shuffled) * 0.8):, :]
+#
+#
+#
+# ### test1 start
+# import keras
+# from keras.models import Sequential, Model
+# from keras.layers import LSTM, Dense, Input, BatchNormalization, LeakyReLU, RepeatVector
+# from keras.callbacks import EarlyStopping, TensorBoard
+# import keras.backend as K
+#
+# timesteps = 12
+# tb_acc = TensorBoard(log_dir="./graph", histogram_freq=0, write_graph=True, write_images=True)
+# early_stopping = EarlyStopping(patience=5)
+#
+# y_bm = pd.DataFrame(columns=['eval_d', 'y'])
+# bm = a.groupby('eval_d')['y_next'].mean()
+# date_ = a.eval_d.unique()
+# a['cum_y'] = np.log(1 + a['1']) + np.log(1 + a['2']) + np.log(1 + a['3']) + np.log(1 + a['4']) \
+#              + np.log(1 + a['5']) + np.log(1 + a['6']) + np.log(1 + a['7']) + np.log(1 + a['8']) \
+#              + np.log(1 + a['9']) + np.log(1 + a['10']) + np.log(1 + a['11'])
+#
+#
+# def to_ordinal_categorical(df):
+#     n_class = df.nunique()
+#     ret = np.zeros([len(df), n_class])
+#
+#     for i in range(n_class):
+#         ret[np.array(df == i).reshape([-1])] = np.array([1 if j >= i else 0 for j in range(n_class)])
+#
+#     return ret
+#
+# y_table = pd.DataFrame(columns=['eval_d', 'y_long', 'y_short'])
+# y_table30 = pd.DataFrame(columns=['eval_d', 'y'])
+# for i, t in enumerate(range(240, len(date_))):
+#     print(date_[t])
+#     data_selected_temp = a[(a.eval_d > date_[t - 240]) & (a.eval_d <= date_[t])]
+#     data_selected = data_selected_temp.dropna(axis=0, how='any')
+#     if t % 12 == 9 or i == 0:
+#         data_train = data_selected[data_selected.eval_d <= date_[t - 48]]
+#         data_arr_train = np.array(data_train[['11', '10', '9','8','7','6','5','4','3','2','1','0']])
+#         label_arr_train = to_ordinal_categorical(data_train['y_port'])
+#
+#         data_valid = data_selected[(data_selected.eval_d > date_[t - 48]) & (data_selected.eval_d <= date_[t - 12])]
+#         data_arr_valid = np.array(data_valid[['11', '10', '9','8','7','6','5','4','3','2','1','0']])
+#         label_arr_valid = to_ordinal_categorical(data_valid['y_port'])
+#
+#         input_ = Input(shape=(timesteps, ), name='input')
+#
+#         x = Dense(64, activation='relu')(input_)
+#         x = BatchNormalization()(x)
+#         x = Dense(64, activation='relu')(x)
+#         x = BatchNormalization()(x)
+#         x = Dense(64, activation='relu')(x)
+#         x = BatchNormalization()(x)
+#         x = Dense(64, activation='relu')(x)
+#         output_ = Dense(10, activation='softmax')(x)
+#
+#         model = Model(inputs=input_, outputs=output_)
+#         model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['acc'])
+#         model.fit(data_arr_train, label_arr_train,
+#                   epochs=100,
+#                   batch_size=1024,
+#                   validation_data=[data_arr_valid, label_arr_valid],
+#                   shuffle=True,
+#                   callbacks=[early_stopping])
+#
+#     data_test = data_selected[data_selected.eval_d == date_[t]]
+#     data_arr_test = np.array(data_test[['11', '10', '9','8','7','6','5','4','3','2','1','0']])
+#
+#     predicted = model.predict(data_arr_test)
+#     prob = np.sum(predicted[:, 7:], axis=1) - np.sum(predicted[:, :3], axis=1)
+#     data_test['y_next_port_l'] = (prob >= np.percentile(prob, 90)) * 1. / np.sum(prob >= np.percentile(prob, 90))
+#     data_test['y_next_port_s'] = (prob <= np.percentile(prob, 10)) * 1. / np.sum(prob <= np.percentile(prob, 10))
+#
+#     y_table = y_table.append({'eval_d': date_[t],
+#                               'y_long': np.sum(data_test.y_next * data_test.y_next_port_l),
+#                               'y_short': np.sum(data_test.y_next * data_test.y_next_port_s)},
+#                              ignore_index=True)
+#
+# y_table.to_csv("result.csv")
+#
+#
+# ### test1 end
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+# # test2 start
+#
+# import keras
+# from keras.models import Sequential, Model
+# from keras.layers import LSTM, Dense, Input, BatchNormalization, Dropout, LeakyReLU
+# import keras.backend as K
+# from keras.optimizers import SGD
+#
+# data_dim = 1
+# lstm_size = 30
+# timesteps = data_p.shape[1]
+# n_fc = data_f.shape[1]
+# nb_classes = 3
+#
+# feature_dropout_rate = 0.2
+# dropout_rate = 0.5
+#
+#
+# model_p = Sequential()
+# model_p.add(BatchNormalization())
+# model_p.add(LSTM(lstm_size, return_sequences=True))# , input_shape=(timesteps, data_dim)))
+# model_p.add(LSTM(lstm_size))
+# # model_p.add(Flatten())
+#
+# input_p = Input(shape=(timesteps, data_dim), name='input_p')
+# output_p = model_p(input_p)
+#
+# output_aux = Dense(nb_classes, activation='softmax', name='output_aux')(output_p)
+#
+#
+# input_f = Input(shape=(n_fc,), name='input_f')
+# merged = keras.layers.concatenate([input_f, output_p])
+#
+# model_final = Sequential()
+# model_final.add(BatchNormalization())
+# # model_final.add(Dropout(feature_dropout_rate))
+# model_final.add(Dense(128, activation='linear'))
+# model_final.add(LeakyReLU(alpha=0.01))
+# # model_final.add(Dropout(dropout_rate))
+# model_final.add(BatchNormalization())
+# model_final.add(Dense(64, activation='linear'))
+# model_final.add(LeakyReLU(alpha=0.01))
+# # model_final.add(Dropout(dropout_rate))
+# model_final.add(BatchNormalization())
+# model_final.add(Dense(32, activation='linear'))
+# model_final.add(LeakyReLU(alpha=0.01))
+# # model_final.add(BatchNormalization())
+# # model_final.add(Dense(3, activation='softmax', name='output'))
+#
+# output = Dense(3, activation='softmax', name='output')(merged)
+# # output = model_final(merged)
+#
+# model = Model(inputs=[input_p, input_f], outputs=[output, output_aux])
+#
+# sgd = SGD(lr=0.001, decay=1e-6, momentum=0.9, nesterov=True)
+# model.compile(optimizer=sgd,
+#               loss={'output': 'categorical_crossentropy', 'output_aux': 'categorical_crossentropy'},
+#               metrics=['acc'],
+#               loss_weights={'output': 1., 'output_aux': 0.2})
+#
+# train_data_p_lstm = train_data_p.reshape((-1, timesteps, data_dim))
+# valid_data_p_lstm = valid_data_p.reshape(-1, timesteps, data_dim)
+# tb_acc = keras.callbacks.TensorBoard(log_dir="./graph", histogram_freq=0, write_graph=True, write_images=True)
+# model.fit({'input_p': train_data_p_lstm, 'input_f': train_data_f},
+#           {'output': train_label, 'output_aux': train_label}, epochs=100, batch_size=10000,
+#           validation_data=([valid_data_p_lstm, valid_data_f], [valid_label, valid_label]),
+#           callbacks=[tb_acc])  # starts training
+#
+# # test2 end
+#
+#
+#
+#
+#
+#
+# # test3 start
+# import keras
+# from keras.models import Sequential, Model
+# from keras.layers import LSTM, Dense, Input, Flatten, BatchNormalization, LeakyReLU, RepeatVector
+# from keras.callbacks import EarlyStopping, TensorBoard
+# import keras.backend as K
+# from qtest.nalu import NALU
+#
+#
+# data_dim = 1
+# lstm_size = 128
+# timesteps = 12
+# n_fc = 12
+# nb_classes = 3
+# train_data_p_lstm = train_data_p.reshape((-1, timesteps, data_dim))
+# valid_data_p_lstm = valid_data_p.reshape(-1, timesteps, data_dim)
+#
+# with K.tf.device('/gpu:0'):
+#     tb_acc = TensorBoard(log_dir="./graph", histogram_freq=0, write_graph=True, write_images=True)
+#     early_stopping = EarlyStopping(patience=5)
+#
+#
+#     input_p = Input(shape=(timesteps, data_dim), name='input_p')
+#     input_f = Input(shape=(n_fc,), name='input_f')
+#
+#
+#
+#     encoded_lstm = LSTM(50, return_sequences=True)(input_p)
+#     encoded_lstm = LSTM(50)(encoded_lstm)
+#
+#     decoded_lstm = RepeatVector(timesteps)(encoded_lstm)
+#     decoded_lstm = LSTM(50, return_sequences=True)(decoded_lstm)
+#     decoded_lstm = LSTM(data_dim, return_sequences=True)(decoded_lstm)
+#
+#     model_enc_lstm = Model(inputs=input_p, outputs=encoded_lstm)
+#     model_dec_lstm = Model(inputs=input_p, outputs=decoded_lstm)
+#
+#     model_dec_lstm.compile(optimizer='rmsprop',
+#                   loss='mean_squared_error')
+#
+#     model_dec_lstm.fit(train_data_p_lstm, train_data_p_lstm,
+#               epochs=100,
+#               batch_size=1024,
+#               validation_data=[valid_data_p_lstm, valid_data_p_lstm],
+#               callbacks=[tb_acc, early_stopping])  # starts training
+#
+#
+# with K.tf.device('/gpu:0'):
+#     encoded = Dense(64, activation='relu')(input_f)
+#     encoded = Dense(32, activation='relu')(encoded)
+#     decoded = Dense(64, activation='relu')(encoded)
+#     decoded = NALU(n_fc)(decoded)
+#
+#
+#     model_enc = Model(inputs=input_f, outputs=encoded)
+#     model_dec = Model(inputs=input_f, outputs=decoded)
+#
+#     model_dec.compile(optimizer='rmsprop',
+#                   loss='mean_squared_error')
+#
+#     model_dec.fit(train_data_f, train_data_f,
+#               epochs=100,
+#               batch_size=1024,
+#               validation_data=[valid_data_f, valid_data_f],
+#               callbacks=[tb_acc, early_stopping])  # starts training
+#
+#
+# with K.tf.device('/gpu:0'):
+#     merged = keras.layers.concatenate([model_enc_lstm(input_p), model_enc(input_f)])
+#
+#     model_final = Sequential()
+#     model_final.add(Dense(128, activation='linear', kernel_initializer='glorot_normal'))
+#     model_final.add(LeakyReLU())
+#     # model_final.add(NALU(128))
+#     model_final.add(BatchNormalization())
+#     model_final.add(Dense(64, activation='linear', kernel_initializer='glorot_normal'))
+#     model_final.add(LeakyReLU())
+#     # model_final.add(NALU(64))
+#     model_final.add(BatchNormalization())
+#     model_final.add(Dense(32, activation='linear', kernel_initializer='glorot_normal'))
+#     model_final.add(LeakyReLU())
+#     # model_final.add(NALU(32))
+#
+#     main_output = Dense(10, activation='softmax', name='output')(model_final(merged))
+#
+#     model = Model(inputs=[input_p, input_f], outputs=main_output)
+#
+#     model.compile(optimizer='adam',
+#                   loss='categorical_crossentropy',
+#                   metrics=['acc'])
+#
+#
+#     model.fit([train_data_p_lstm, train_data_f], train_label,
+#               epochs=500,
+#               batch_size=2048,
+#               validation_data=[[valid_data_p_lstm, valid_data_f], valid_label],
+#               callbacks=[tb_acc, early_stopping])  # starts training
+#
+#
+#     y_table = pd.DataFrame(columns=['eval_d', 'y_long', 'y_short'])
+#     date_ = data.eval_d.unique()
+#     for d in date_:
+#         data_test = data[data.eval_d == d]
+#         if len(data_test) <= 20:
+#             continue
+#         print(d)
+#
+#         data_arr_p = np.array(data_test[y_list]).reshape((-1, timesteps, data_dim))
+#         data_arr_f = np.array(data_test[fc_list])
+#         predicted = model.predict([data_arr_p, data_arr_f])
+#         prob = np.sum(predicted[:, 7:], axis=1) - np.sum(predicted[:, :3], axis=1)
+#
+#         data_test['y_next_port_l'] = (prob >= np.percentile(prob, 90)) * 1. / np.sum(prob >= np.percentile(prob, 90))
+#         data_test['y_next_port_s'] = (prob <= np.percentile(prob, 10)) * 1. / np.sum(prob <= np.percentile(prob, 10))
+#
+#         y_table = y_table.append({'eval_d': d,
+#                                   'y_long': np.sum(data_test.y_next * data_test.y_next_port_l),
+#                                   'y_short': np.sum(data_test.y_next * data_test.y_next_port_s)},
+#                                  ignore_index=True)
+#
+#     y_table.to_csv("test_insample.csv")
+#
+#
+# # test3 end
