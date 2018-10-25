@@ -36,7 +36,7 @@ def stock_predictor(inputs, predictor_type, use_batch_norm):
             net = BatchNormalization()(net)
         net = LeakyReLU()(net)
 
-        n_res = 3
+        n_res = 1
         for _ in range(n_res):
             net = res_block(net, True)
         net = Conv2D(32, kernel_size=(1, 1))(net)
@@ -150,6 +150,15 @@ def read_stock_history():
     return history, infocode, item_list
 
 
+def test_model(env, model):
+    observation, info = env.reset()
+    observation = observation[:, :, 3:4] / observation[:, :, 0:1]
+    done = False
+    while not done:
+        action = model.predict_single(observation)
+        observation, _, done, _ = env.step(action)
+        observation = observation[:, :, 3:4] / observation[:, :, 0:1]
+    env.render()
 
 
 def main():
@@ -159,6 +168,15 @@ def main():
     num_training_time = 1095
     window_len = 50
     nb_classes = len(target_stocks) + 1
+
+    CONFIG = {'seed': 1234,
+              'episode': 1,
+              'batch_size': 256,
+              'gamma': 0.99,
+              'buffer_size': 100,
+              'max_step': 500,
+              'tau': 0.001
+              }
 
     # get target history
     target_history = np.empty(shape=(len(target_stocks), num_training_time, history.shape[2]))
@@ -183,7 +201,7 @@ def main():
     K.set_session(sess)
     actor = StockActor(sess, state_dim, action_dim, learning_rate, tau, batch_size, predictor_type, use_batch_norm)
     critic = StockCritic(sess, state_dim, action_dim, learning_rate, tau, predictor_type, use_batch_norm)
-    model_ddpg = DDPG(env, sess, actor, critic, actor_noise)
+    model_ddpg = DDPG(env, sess, actor, critic, actor_noise, config=CONFIG)
 
     model_ddpg.initialize()
     model_ddpg.train()

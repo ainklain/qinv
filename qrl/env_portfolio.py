@@ -32,7 +32,6 @@ def max_drawdown(returns, eps=1e-8):
     return (trough - peak) / (peak + eps)
 
 
-
 class DataGenerator:
     def __init__(self, history, stock_list, steps=730, window_len=50, start_idx=0, start_date=None):
         import copy
@@ -47,9 +46,9 @@ class DataGenerator:
 
     def _step(self):
         self.step += 1
-        obs = self.data[:, self.step: (self.step + self.window_len), :].copy()
+        obs = self.data[self.step: (self.step + self.window_len), :, :].copy()
 
-        ground_truth_obs = self.data[:, (self.step + self.window_len): (self.step + self.window_len) + 1, :].copy()
+        ground_truth_obs = self.data[(self.step + self.window_len): (self.step + self.window_len) + 1, :, :].copy()
         done = self.step >= self.steps
         return obs, done, ground_truth_obs
 
@@ -59,15 +58,15 @@ class DataGenerator:
         if self.start_date is None:
             self.idx = np.random.randint(
                 low=self.window_len,
-                high=self._data.shape[1] - self.steps)
+                high=self._data.shape[0] - self.steps)
         else:
             self.idx = index_to_date(self.start_date) - self.start_idx
 
-        data = self._data[:, (self.idx - self.window_len): (self.idx + self.steps + 1), :4]
+        data = self._data[(self.idx - self.window_len): (self.idx + self.steps + 1), :, :4]
         self.data = data
 
-        return self.data[:, self.step: (self.step + self.window_len), :].copy(), \
-               self.data[:, (self.step + self.window_len): (self.step + self.window_len + 1), :].copy()
+        return self.data[self.step: (self.step + self.window_len), :, :].copy(), \
+               self.data[(self.step + self.window_len): (self.step + self.window_len + 1), :, :].copy()
 
 
 class PortfolioSim:
@@ -129,7 +128,7 @@ class PortfolioEnv(gym.Env):
                  sample_start_date=None):
         super().__init__()
         self.window_len = window_len
-        self.num_stocks = history.shape[0]
+        self.num_stocks = history.shape[1]
         self.start_idx = start_idx
 
         self.src = DataGenerator(history, stock_list, steps=steps, window_len=window_len, start_idx=start_idx, start_date=sample_start_date)
@@ -140,8 +139,8 @@ class PortfolioEnv(gym.Env):
                                 steps=steps)
 
         self.action_space = gym.spaces.Box(0, 1, shape=(len(self.src.asset_names) + 1, ), dtype=np.float32)
-        self.obs_space = gym.spaces.Box(low=-np.inf, high=np.inf,
-                                        shape=(len(stock_list), window_len, history.shape[-1]),
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf,
+                                        shape=(window_len, len(stock_list), history.shape[-1]),
                                         dtype=np.float32)
 
     # def seed(self, seed=None):
@@ -164,14 +163,14 @@ class PortfolioEnv(gym.Env):
 
         obs, done1, ground_truth_obs = self.src._step()
 
-        cash_obs = np.ones((1, self.window_len, obs.shape[2]))
-        obs = np.concatenate((cash_obs, obs), axis=0)
+        cash_obs = np.ones((self.window_len, 1, obs.shape[2]))
+        obs = np.concatenate((cash_obs, obs), axis=1)
 
         cash_ground_truth = np.ones((1, 1, ground_truth_obs.shape[2]))
-        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=0)
+        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=1)
 
-        close_p_vector = obs[:, -1, 3]
-        open_p_vector = obs[:, -1, 0]
+        close_p_vector = obs[-1, :, 3]
+        open_p_vector = obs[-1, :, 0]
         y1 = close_p_vector / open_p_vector
         reward, info, done2 = self.sim._step(weights, y1)
 
@@ -182,7 +181,8 @@ class PortfolioEnv(gym.Env):
 
         self.infos.append(info)
 
-        return obs, reward, done1 or done2, info
+        obs = obs[:, :, 3:4] / obs[:, :, 0:1]
+        return obs, reward, done1 or done2, dict()
 
     def reset(self):
         return self._reset()
@@ -191,13 +191,16 @@ class PortfolioEnv(gym.Env):
         self.infos = []
         self.sim.reset()
         obs, ground_truth_obs = self.src.reset()
-        cash_obs = np.ones((1, self.window_len, obs.shape[2]))
-        obs = np.concatenate((cash_obs, obs), axis=0)
+        cash_obs = np.ones((self.window_len, 1, obs.shape[2]))
+        obs = np.concatenate((cash_obs, obs), axis=1)
         cash_ground_truth = np.ones((1, 1, ground_truth_obs.shape[2]))
-        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=0)
+        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=1)
         info = {}
         info['next_obs'] = ground_truth_obs
-        return obs, info
+
+        obs = obs[:, :, 3:4] / obs[:, :, 0:1]
+        return obs
+        # return obs, info
 
     def render(self, mode='human', close=False):
         return self._render(mode=mode, close=close)
@@ -247,14 +250,14 @@ class MultiActionPortfolioEnv(PortfolioEnv):
         np.testing.assert_almost_equal(np.sum(weights, axis=1), np.ones(shape=(weights.shape[0])), 3)
         obs, done1, ground_truth_obs = self.src._step()
 
-        cash_obs = np.ones((1, self.window_len, obs.shape[2]))
-        obs = np.concatenate((cash_obs, obs), axis=0)
+        cash_obs = np.ones((self.window_len, 1, obs.shape[2]))
+        obs = np.concatenate((cash_obs, obs), axis=1)
 
         cash_ground_truth = np.ones((1, 1, ground_truth_obs.shape[2]))
-        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=0)
+        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=1)
 
-        close_p_vector = obs[:, -1, 3]
-        open_p_vector = obs[:, -1, 0]
+        close_p_vector = obs[-1, :, 3]
+        open_p_vector = obs[-1, :, 0]
         y1 = close_p_vector / open_p_vector
 
         rewards = np.empty(shape=(weights.shape[0]))
@@ -281,10 +284,10 @@ class MultiActionPortfolioEnv(PortfolioEnv):
         for sim in self.sim:
             sim.reset()
         obs, ground_truth_obs = self.src.reset()
-        cash_obs = np.ones((1, self.window_len, obs.shape[2]))
-        obs = np.concatenate((cash_obs, obs), axis=0)
+        cash_obs = np.ones((self.window_len, 1, obs.shape[2]))
+        obs = np.concatenate((cash_obs, obs), axis=1)
         cash_ground_truth = np.ones((1, 1, ground_truth_obs.shape[2]))
-        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=0)
+        ground_truth_obs = np.concatenate((cash_ground_truth, ground_truth_obs), axis=1)
         info = {}
         info['next_obs'] = ground_truth_obs
         return obs, info

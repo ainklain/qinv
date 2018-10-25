@@ -8,14 +8,6 @@ import tensorflow as tf
 from qrl.replay_buffer import ReplayBuffer
 
 
-CONFIG = {'seed': 1234,
-          'episode': 10,
-          'batch_size': 32,
-          'gamma': 0.99,
-          'buffer_size': 100,
-          'max_step': 100,
-          'tau': 0.001
-          }
 # {
 #   "episode": 500,
 #   "max step": 1000,
@@ -34,12 +26,13 @@ def build_summaries():
 class DDPG(object):
     def __init__(self, env, sess, actor, critic, actor_noise, obs_normalizer=None, action_processor=None,
                  # config_file='config/default.json',
-                 config=CONFIG,
+                 config=None,
                  model_save_path='weights/ddpg/ddpg/ckpt',
                  summary_path='results/ddpg/'):
         # with open(config_file) as f:
         #     self.config = json.load(f)
         # assert self.config != None, "Can't load config file."
+        assert config is not None, 'should set config'
         self.config = config
         np.random.seed(self.config['seed'])
         if env:
@@ -135,7 +128,7 @@ class DDPG(object):
 
                 print("Episode", i, "Step", j, "Action", a_t, "Reward", r_t, "Loss", loss)
                 if done or j == self.config['max_step'] - 1:
-                    print('Episode: {:d}, Reward: {:.2f}, Qmax: {:.4f}'.format(i, total_reward))
+                    print('Episode: {}, Reward: {}'.format(i, total_reward))
                     break
 
         print('Finish.')
