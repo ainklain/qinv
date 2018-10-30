@@ -13,7 +13,7 @@ from rl.agents import DDPGAgent
 from rl.memory import SequentialMemory
 from rl.random import OrnsteinUhlenbeckProcess
 
-from qrl.env_portfolio import PortfolioEnv
+from qrl.env_portfolio2 import PortfolioEnv
 
 
 def read_stock_history():
@@ -37,8 +37,9 @@ def read_stock_history():
     sqlm = SqlManager()
     df = sqlm.db_read(sql_)
 
-    item_list = ['open_','high_','low_', 'close_', 'volume_']
+    item_list = ['open_', 'high_', 'low_', 'close_', 'volume_']
     infocode = list(df.infocode.unique())
+    marketdate = list(df.marketdate.unique())
 
     df_to_arr = np.zeros([len(df.marketdate.unique()), len(df.infocode.unique()), len(item_list)])
     for i, item in enumerate(item_list):
@@ -46,17 +47,17 @@ def read_stock_history():
 
     history = df_to_arr[~np.isnan(np.sum(df_to_arr, axis=(1, 2))), :, :]
 
-    return history, infocode, item_list
+    return history, infocode, marketdate, item_list
 
 
 
 
 
 def main():
-    history, stock_list, item_list = read_stock_history()
+    history, stock_list, marketdate, item_list = read_stock_history()
     history = history[:, :, :4]
     target_stocks = stock_list
-    num_training_time = 1095
+    num_training_time = 2000
     window_length = 50
     nb_actions = len(target_stocks) + 1
 
@@ -81,11 +82,14 @@ def main():
 
     # get target history
     target_history = np.empty(shape=(num_training_time, len(target_stocks), history.shape[2]))
+    target_marketdate = marketdate[:num_training_time]
+
     for i, stock in enumerate(target_stocks):
         target_history[:, i, :] = history[:num_training_time, stock_list.index(stock), :]
 
 
-    env = PortfolioEnv(target_history, target_stocks, steps=1000, window_len=window_length)
+
+    env = PortfolioEnv(target_history, target_stocks, target_marketdate, steps=252, window_len=window_length)
 
 
     np.random.seed(123)
@@ -134,7 +138,7 @@ def main():
     x = Dense(64)(x)
     x = Activation('relu')(x)
     w_init = keras.initializers.RandomUniform(minval=-0.003, maxval=0.003, seed=None)
-    x = Dense(nb_actions, activation='softmax', kernel_initializer=w_init)(x)
+    x = Dense(1, activation='linear', kernel_initializer=w_init)(x)
     critic = Model(inputs=[action_input, observation_input], outputs=x)
     print(critic.summary())
 
@@ -150,10 +154,15 @@ def main():
     # Okay, now it's time to learn something! We visualize the training here for show, but this
     # slows down training quite a lot. You can always safely abort the training prematurely using
     # Ctrl + C.
-    agent.fit(env, nb_steps=50000, visualize=True, verbose=1, nb_max_episode_steps=200)
+    agent.fit(env, nb_steps=500, visualize=True, verbose=1, nb_max_episode_steps=252)
+
 
     # After training is done, we save the final weights.
     # agent.save_weights('ddpg_{}_weights.h5f'.format(ENV_NAME), overwrite=True)
 
     # Finally, evaluate our algorithm for 5 episodes.
-    agent.test(env, nb_episodes=5, visualize=True, nb_max_episode_steps=200)
+    # agent.test(env, nb_episodes=5, visualize=True, nb_max_episode_steps=200)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,11 +1,40 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
+import datetime
 from pprint import pprint
 import gym
 import gym.spaces
 from gym.utils import seeding
+
+
+import numpy as np
+from matplotlib.lines import Line2D
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+
+def date_to_index(date_string):
+    """
+
+    Args:
+        date_string: in format of '2012-08-13'
+
+    Returns: the days from start_date: '2012-08-13'
+
+    >>> date_to_index('2012-08-13')
+    0
+    >>> date_to_index('2012-08-12')
+    -1
+    >>> date_to_index('2012-08-15')
+    2
+    """
+    start_date = '2012-08-13'
+    end_date = '2017-08-11'
+    date_format = '%Y-%m-%d'
+    start_datetime = datetime.datetime.strptime(start_date, date_format)
+    end_datetime = datetime.datetime.strptime(end_date, date_format)
+    return (datetime.datetime.strptime(date_string, date_format) - start_datetime).days
 
 
 def index_to_date(index):
@@ -60,7 +89,7 @@ class DataGenerator:
                 low=self.window_len,
                 high=self._data.shape[0] - self.steps)
         else:
-            self.idx = index_to_date(self.start_date) - self.start_idx
+            self.idx = date_to_index(self.start_date) - self.start_idx
 
         data = self._data[(self.idx - self.window_len): (self.idx + self.steps + 1), :, :4]
         self.data = data
@@ -177,12 +206,12 @@ class PortfolioEnv(gym.Env):
         info['market_value'] = np.cumprod([inf['return'] for inf in self.infos + [info]])[-1]
         info['date'] = index_to_date(self.start_idx + self.src.idx + self.src.step)
         info['steps'] = self.src.step
-        info['next_obs'] = ground_truth_obs
-
+        # info['next_obs'] = ground_truth_obs
+        # print(info)
         self.infos.append(info)
 
         obs = obs[:, :, 3:4] / obs[:, :, 0:1]
-        return obs, reward, done1 or done2, dict()
+        return obs, reward, done1 or done2, info
 
     def reset(self):
         return self._reset()
@@ -198,6 +227,8 @@ class PortfolioEnv(gym.Env):
         info = {}
         info['next_obs'] = ground_truth_obs
 
+        self.fig = None
+
         obs = obs[:, :, 3:4] / obs[:, :, 0:1]
         return obs
         # return obs, info
@@ -211,17 +242,32 @@ class PortfolioEnv(gym.Env):
         if mode == 'ansi':
             pprint(self.infos[-1])
         elif mode == 'human':
-            self.plot()
+            if self.fig is None:
+                self.fig = plt.figure()
+                self.ax = self.fig.add_subplot(111)
+                self.line, = self.ax.plot([], [])
+                self.line.set_data([], [])
+
+                ani = animation.FuncAnimation(self.fig, self.plot, frames=10,
+                                              interval=10, blit=True)
+
+                plt.show()
+
+            else:
+                self.plot()
 
     def plot(self):
+        # return self.infos[-1]['market_value']
         df_info = pd.DataFrame(self.infos)
-        df_info['date'] = pd.to_datetime(df_info['date'], format='%Y-%m-%d')
-        df_info.set_index('date', inplace=True)
-        mdd = max_drawdown(df_info.rate_of_return + 1)
-        sr = sharpe_ratio(df_info.rate_of_return)
-        title = 'max_drawdown={: 2.2%} sharpe_ratio={: 2.4f}'.format(mdd, sr)
-        df_info[['portfolio_value', 'market_value']].plot(title=title, fig=plt.gcf(), rot=30)
-
+        self.line.set_data(list(df_info.index), list(df_info['market_value']))
+        self.ax.clear()
+        self.ax.plot(df_info.index, df_info.market_value)
+        # df_info['date'] = pd.to_datetime(df_info['date'], format='%Y-%m-%d')
+        # df_info.set_index('date', inplace=True)
+        # mdd = max_drawdown(df_info.rate_of_return + 1)
+        # sr = sharpe_ratio(df_info.rate_of_return)
+        # title = 'max_drawdown={: 2.2%} sharpe_ratio={: 2.4f}'.format(mdd, sr)
+        # return df_info[['portfolio_value', 'market_value']].plot(title=title, fig=plt.gcf(), rot=30)
 
 
 class MultiActionPortfolioEnv(PortfolioEnv):
@@ -271,9 +317,9 @@ class MultiActionPortfolioEnv(PortfolioEnv):
             dones[i] = done2
 
         info['market_value'] = np.cumprod([inf['return'] for inf in self.infos + [info]])[-1]
-        info['date'] = index_to_date(self.start_idx + self.src.idx + self.src.step)
+        # info['date'] = index_to_date(self.start_idx + self.src.idx + self.src.step)
         info['steps'] = self.src.step
-        info['next_obs'] = ground_truth_obs
+        # info['next_obs'] = ground_truth_obs
 
         self.infos.append(info)
 
