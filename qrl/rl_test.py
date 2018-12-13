@@ -68,12 +68,12 @@ def factor_history():
                 ) D
                 join wms..indexdata a
                 on d.eval_d = convert(date, a.base_d)
-                where idxcd in ('MOM','BEME','GPA','USDKRW','KISCOMPBONDCALL')
+                where idxcd in ('KOSPI','MOM','BEME','GPA','USDKRW','KISCOMPBONDCALL')
                 and base_d >= '20050201'
             ) A
             pivot (
                 min(value_)
-                for idxcd in ([MOM],[BEME],[GPA],[USDKRW],[KISCOMPBONDCALL])
+                for idxcd in ([KOSPI],[MOM],[BEME],[GPA],[USDKRW],[KISCOMPBONDCALL])
             ) B
             order by eval_d
     """
@@ -90,7 +90,6 @@ def factor_history():
     # history = df_to_arr[~np.isnan(np.sum(df_to_arr, axis=1)), :]
 
     return history, factor_id, marketdate
-
 
 
 def main():
@@ -215,14 +214,13 @@ def main2():
     steps = 252
     nb_actions = len(target_assets)
 
-
     # get target history
     import copy
     target_history = copy.deepcopy(history)
     target_marketdate = copy.deepcopy(marketdate)
 
     env = PortfolioEnv(target_history, target_assets, target_marketdate, steps=steps, window_length=window_length,
-                       trading_cost=0.00)
+                       trading_cost=0.001)
 
     action_input = Input(shape=(nb_actions,), name='action_input')
     observation_input = Input(shape=(1, window_length, nb_actions, 1), name='observation_input')
@@ -290,10 +288,10 @@ def main2():
     output_critic_3 = np.zeros([n_loop, critic_intermediate_3.output_shape[1]])
 
     for l in range(n_loop):
-        agent_history = agent.fit(env, nb_steps=steps*1, visualize=False, verbose=1, nb_max_episode_steps=steps)
+        agent_history = agent.fit(env, nb_steps=steps*50, visualize=False, verbose=1, nb_max_episode_steps=steps)
         # obs, _, _ = env.src._step()
-        recent_obs = agent.recent_observation.reshape(1, 1, 50, 5, 1)
-        recent_action = agent.recent_action.reshape(1, 5)
+        recent_obs = agent.recent_observation.reshape(1, 1, window_length, nb_actions, 1)
+        recent_action = agent.recent_action.reshape(1, nb_actions)
         output_actor_1[l] = actor_intermediate_1.predict(recent_obs)[0, :, :, 0]
         output_actor_2[l] = actor_intermediate_2.predict(recent_obs)[0, :, :, 0]
         output_actor_3[l] = actor_intermediate_3.predict(recent_obs)
@@ -308,7 +306,7 @@ def main2():
         output_critic_3[l] = critic_intermediate_3.predict([recent_action, recent_obs])
         print("1: {}, 2:{}, 3:{}".format(output_critic_1[l], output_critic_2[l], output_critic_3[l]))
 
-        # agent.test(env, nb_episodes=1, visualize=True, nb_max_episode_steps=steps)
+        agent.test(env, nb_episodes=1, visualize=True, nb_max_episode_steps=steps)
     plot_layer_3d(output_actor_1)
     plot_layer_3d(output_actor_2)
     plot_layer_2d(output_actor_3)

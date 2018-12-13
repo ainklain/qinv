@@ -181,24 +181,26 @@ class PortfolioEnv(gym.Env):
         # weights = action
         # weights /= (weights.sum() + eps)
         # weights[0] += np.clip(1 - weights.sum(), 0, 1)
-        action = np.clip(action, 0, 1)
+        action = np.clip(action, 0.0, 1)
         weights = np.zeros_like(action)
         weights[action > 0] = action[action > 0] / (np.sum(action[action > 0]) + eps)
+        weights[-1] = 1 - np.sum(weights[:-1])
         # weights[action < 0] = action[action < 0] / (np.sum(action[action < 0]) + eps)
 
 
         assert (weights >= (-1 - 1e-6) * (weights <= (1 + 1e-6))).all()
-        np.testing.assert_almost_equal(np.sum(weights), 1.0, 3)
+        np.testing.assert_almost_equal(np.sum(weights), 1.0, 3,
+                                       err_msg='\n[err msg] \nsum of weights: {}\naction:{}'.format(np.sum(weights), action))
         # np.testing.assert_almost_equal(np.sum(weights), 0.0, 3)
 
         obs, done1, ground_truth_obs = self.src._step()
 
         y1 = obs[-1, :]
         reward, info, done2 = self.sim._step(weights, y1)
-
+        reward = reward - np.sum(weights == 0) * 0.01
         self.infos.append(info)
 
-        obs = np.expand_dims(obs, -1)
+        # obs = np.expand_dims(obs, -1)
         # print('reward:{} , info:{}'.format(reward, info))
         return obs, reward, done1 or done2, info
 
@@ -209,7 +211,7 @@ class PortfolioEnv(gym.Env):
         self.infos = []
         self.sim.reset()
         obs, ground_truth_obs = self.src.reset()
-        obs = np.expand_dims(obs, -1)
+        # obs = np.expand_dims(obs, -1)
 
         self.render_call = 0
 
@@ -222,6 +224,9 @@ class PortfolioEnv(gym.Env):
     def _render(self, mode='human', close=False):
         if close:
             return
+        if len(self.infos) == 0:
+            return False
+
         if mode == 'ansi':
             pprint(self.infos[-1])
         elif mode == 'human':
@@ -241,7 +246,7 @@ class PortfolioEnv(gym.Env):
                 self.fig.canvas.flush_events()
 
     def _get_image(self):
-        df_info = pd.DataFrame(self.infos)
+        df_info = pd.DataFrame(self.infos, columns=['reward', 'nav', 'costs'])
         self.ax1.plot(df_info.index, df_info.nav, color='k')
 
         actions_t = np.transpose(self.sim.actions)
