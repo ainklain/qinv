@@ -1,3 +1,4 @@
+
 import random
 import numpy as np
 import pandas as pd
@@ -45,6 +46,20 @@ def read_stock_history():
     history = df_to_arr[~np.isnan(np.sum(df_to_arr, axis=(1, 2))), :, :]
 
     return history, infocode, marketdate, item_list
+
+
+def factor_history_csv():
+    file_nm = 'data_factor.csv'
+    df = pd.read_csv(file_nm, index_col=0)
+
+    df.columns = [i.lower() for i in df.columns]
+    df.set_index('eval_d', inplace=True)
+    df = df[df.isna().sum(axis=1) == 0]
+    factor_id = list(df.columns)
+    marketdate = list(df.index.unique())
+    history = df.values
+
+    return history, factor_id, marketdate
 
 
 def factor_history():
@@ -213,16 +228,16 @@ class DDPG(object):
 
 def main():
 
-    history, factor_id, marketdate = factor_history()
+    history, factor_id, marketdate = factor_history_csv()
     target_assets = factor_id
     window_length = 50
     mem_size = 100
     steps = 252
     nb_actions = len(target_assets)
 
-    max_episodes = 100
+    max_episodes = 1
     max_ep_steps = 250
-    RENDER = False
+    RENDER = True
 
     # get target history
     import copy
@@ -266,14 +281,37 @@ def main():
             # print(a)
 
             if j == max_ep_steps - 1:
+                # import matplotlib.animation as animation
+                # import matplotlib.pyplot as plt
+                # plt.axis('off')
+                # fig = plt.figure()
+                # ani = animation.ArtistAnimation(fig, env.ims)
+                # ani.save('test.gif', writer='imagemagick', dpi=80)
                 print('episode: {}, reward: {}'.format(i, ep_reward))
                 break
 
 
-if __name__ == '__main__':
-    main()
+#
+# if __name__ == '__main__':
+#     main()
 
-
+# import matplotlib.pyplot as plt
+# import matplotlib.image as mpimage
+# from matplotlib import animation
+#
+# fig = plt.figure()
+#
+# plt.axis('off')
+# a = []
+# num = [i * 20 for i in range(1, 3)]
+# for i in num:
+#     im_data = mpimage.imread('fig_{}.jpg'.format(i))
+#     im = plt.imshow(im_data, animated=True)
+#     a.append([im])
+#
+# my_anim = animation.ArtistAnimation(fig, a, interval=1000, blit=True, repeat_delay=1000)
+# my_anim.save('test.mp4', fps=30)
+# plt.show()
 #
 # https://www.alexirpan.com/2018/02/14/rl-hard.html
 # https://himanshusahni.github.io/2018/02/23/reinforcement-learning-never-worked.html

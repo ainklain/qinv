@@ -1,10 +1,11 @@
 # https://github.com/hackthemarket/gym-trading/blob/master/gym_trading/envs/trading_env.py
+# imagemagick: http://docs.wand-py.org/en/0.4.1/guide/install.html
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+from PIL import Image
 from pprint import pprint
 import gym
 import gym.spaces
@@ -230,20 +231,51 @@ class PortfolioEnv(gym.Env):
         if mode == 'ansi':
             pprint(self.infos[-1])
         elif mode == 'human':
+
             if self.render_call == 0:
                 self.fig = plt.figure()
                 self.ax1, self.ax2, self.ax3 = self.fig.subplots(3, 1)
 
             self._get_image()
 
+            # if self.render_call == 0:
+            #     # self.fig = plt.figure()
+            #     # self.ax1, self.ax2, self.ax3 = self.fig.subplots(3, 1)
+            #     self.fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
+            #     line1, = ax1.plot([], [])
+            #     line2, = ax2.stackplot([], [])
+            #     line3, = ax3.plot([], [])
+            #     self.lines = [line1, line2, line3]
+            #
+            # self._get_image2()
+
             if self.render_call == 0:
                 self.ax3.legend(loc='lower center', bbox_to_anchor=(0.5, -0.05), ncol=3, fancybox=True, shadow=True)
                 self.render_call += 1
+                self.ims = []
 
-            # self.fig.canvas.draw()
+            # Writer = animation.writers['ffmpeg']
+            # writer = Writer(fps=15, metadata=dict(artist='Me'), bitrate=1800)
+
             if self.sim.step % 20 == 0:
                 self.fig.canvas.draw()
                 self.fig.canvas.flush_events()
+
+                # X = np.array(self.fig.canvas.renderer._renderer)
+                # im = plt.imshow(X, animated=True, interpolation='nearest')
+                # self.ims.append([im])
+
+                # plt.savefig('fig_{}.png'.format(self.sim.step))
+                # w, h = self.fig.canvas.get_width_height()
+                # im = np.fromstring(self.fig.canvas.tostring_rgb(), dtype='uint8')
+                # im.shape = (w, h, 3)
+                # # Image.frombytes('RGB', (w, h), im.tostring())
+                # im_ob = plt.imshow(Image.frombytes('RGB', (w, h), im.tostring()), animated=True)
+                # self.ims.append(im_ob)
+                #
+                # ani = animation.ArtistAnimation(self.fig, self.ims)
+                # ani.save('test.gif', writer='imagemagick', dpi=80)
+
 
     def _get_image(self):
         df_info = pd.DataFrame(self.infos, columns=['reward', 'nav', 'costs'])
@@ -257,3 +289,20 @@ class PortfolioEnv(gym.Env):
         for i in range(self.num_assets):
             self.ax3.plot(df_info.index, stk_nav_t[i, :len(df_info.index)], color=pal[i], label=self.asset_list[i])
 
+    def _get_image2(self):
+        df_info = pd.DataFrame(self.infos, columns=['reward', 'nav', 'costs'])
+        self.line1.set_data(df_info.index, df_info.nav)
+        self.line1.set_color('k')
+
+        actions_t = np.transpose(self.sim.actions)
+        pal = sns.color_palette("hls", self.num_assets)
+        self.line2.set_data(df_info.index, actions_t[:, :len(df_info.index)])
+        self.line2.set_color(pal)
+
+        stk_nav_t = np.transpose(self.sim.stk_nav)
+        for i in range(self.num_assets):
+            self.line3.set_data(df_info.index, stk_nav_t[i, :len(df_info.index)])
+            self.line3.set_color(pal[i])
+            self.line3.set_label(self.asset_list[i])
+
+        return self.lines
