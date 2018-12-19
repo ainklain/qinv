@@ -1,11 +1,16 @@
 
+# main2(mode='train', tc='plus')
+# main2(mode='train', tc='zero')
+# main2(mode='train', tc='minus', load_model=False, train_visualize=False, train_steps=50, n_episodes=10)
+
+
 import numpy as np
 import pandas as pd
 import gym
 from gym import spaces
 
 import keras
-from keras.models import Sequential, Model
+from keras.models import Sequential, Model, load_model
 from keras.layers import Dense, Activation, Flatten, Input, Concatenate, Conv2D, BatchNormalization, Reshape, LeakyReLU
 from keras.optimizers import Adam
 from keras import backend as K
@@ -205,7 +210,7 @@ def main():
     agent.test(env, nb_episodes=5, visualize=False, nb_max_episode_steps=252)
 
 
-def main2():
+def main2(mode='train', tc='plus', load_model=True, train_visualize=False, train_steps=50, n_episodes=10):
 
     history, factor_id, marketdate = factor_history()
     target_assets = factor_id
@@ -219,8 +224,15 @@ def main2():
     target_history = copy.deepcopy(history)
     target_marketdate = copy.deepcopy(marketdate)
 
+    if tc == 'plus':
+        trading_cost = 0.001
+    elif tc == 'zero':
+        trading_cost = 0.00
+    else:
+        trading_cost = -0.01
+
     env = PortfolioEnv(target_history, target_assets, target_marketdate, steps=steps, window_length=window_length,
-                       trading_cost=0.001)
+                       trading_cost=trading_cost)
 
     action_input = Input(shape=(nb_actions,), name='action_input')
     observation_input = Input(shape=(1, window_length, nb_actions, 1), name='observation_input')
@@ -274,61 +286,71 @@ def main2():
                       memory=memory, nb_steps_warmup_critic=mem_size, nb_steps_warmup_actor=mem_size,
                       random_process=random_process, gamma=.90, target_model_update=1e-3)
     agent.compile(Adam(lr=.001, clipnorm=1.), metrics=['mae'])
-
+    if load_model:
+        weights_filename = 'model_tc_{}.h5f'.format(tc)
+        agent.load_weights(weights_filename)
     # Okay, now it's time to learn something! We visualize the training here for show, but this
     # slows down training quite a lot. You can always safely abort the training prematurely using
     # Ctrl + C.
 
-    n_loop = 10
+    n_loop = n_episodes
     output_actor_1 = np.zeros([n_loop, actor_intermediate_1.output_shape[1], actor_intermediate_1.output_shape[2]])
     output_actor_2 = np.zeros([n_loop, actor_intermediate_2.output_shape[1], actor_intermediate_2.output_shape[2]])
     output_actor_3 = np.zeros([n_loop, actor_intermediate_3.output_shape[1]])
     output_critic_1 = np.zeros([n_loop, critic_intermediate_1.output_shape[1]])
     output_critic_2 = np.zeros([n_loop, critic_intermediate_2.output_shape[1]])
     output_critic_3 = np.zeros([n_loop, critic_intermediate_3.output_shape[1]])
+    if mode == 'train':
+        for l in range(n_loop):
+            agent_history = agent.fit(env, nb_steps=steps * train_steps, visualize=train_visualize, verbose=1, nb_max_episode_steps=steps)
+            agent.save_weights('model_tc_{}.h5f'.format(tc), overwrite=True)
 
-    for l in range(n_loop):
-        agent_history = agent.fit(env, nb_steps=steps*50, visualize=False, verbose=1, nb_max_episode_steps=steps)
-        # obs, _, _ = env.src._step()
-        recent_obs = agent.recent_observation.reshape(1, 1, window_length, nb_actions, 1)
-        recent_action = agent.recent_action.reshape(1, nb_actions)
-        output_actor_1[l] = actor_intermediate_1.predict(recent_obs)[0, :, :, 0]
-        output_actor_2[l] = actor_intermediate_2.predict(recent_obs)[0, :, :, 0]
-        output_actor_3[l] = actor_intermediate_3.predict(recent_obs)
-        # print("1: {}, 2:{}, 3:{}, 0's:{}, 1's:{}".format(np.mean(output_actor_1.squeeze(), axis=2),
-        #                                                  np.mean(output_actor_2.squeeze(), axis=2),
-        #                                                  output_actor_3,
-        #                                                  np.sum(output_actor_3 == 0),
-        #                                                  np.sum(output_actor_3 > 0)))
+            # obs, _, _ = env.src._step()
+            recent_obs = agent.recent_observation.reshape(1, 1, window_length, nb_actions, 1)
+            recent_action = agent.recent_action.reshape(1, nb_actions)
+            output_actor_1[l] = actor_intermediate_1.predict(recent_obs)[0, :, :, 0]
+            output_actor_2[l] = actor_intermediate_2.predict(recent_obs)[0, :, :, 0]
+            output_actor_3[l] = actor_intermediate_3.predict(recent_obs)
+            # print("1: {}, 2:{}, 3:{}, 0's:{}, 1's:{}".format(np.mean(output_actor_1.squeeze(), axis=2),
+            #                                                  np.mean(output_actor_2.squeeze(), axis=2),
+            #                                                  output_actor_3,
+            #                                                  np.sum(output_actor_3 == 0),
+            #                                                  np.sum(output_actor_3 > 0)))
 
-        output_critic_1[l] = critic_intermediate_1.predict([recent_action, recent_obs])
-        output_critic_2[l] = critic_intermediate_2.predict([recent_action, recent_obs])
-        output_critic_3[l] = critic_intermediate_3.predict([recent_action, recent_obs])
-        print("1: {}, 2:{}, 3:{}".format(output_critic_1[l], output_critic_2[l], output_critic_3[l]))
+            output_critic_1[l] = critic_intermediate_1.predict([recent_action, recent_obs])
+            output_critic_2[l] = critic_intermediate_2.predict([recent_action, recent_obs])
+            output_critic_3[l] = critic_intermediate_3.predict([recent_action, recent_obs])
+            print("1: {}, 2:{}, 3:{}".format(output_critic_1[l], output_critic_2[l], output_critic_3[l]))
 
+            agent.test(env, nb_episodes=1, visualize=True, nb_max_episode_steps=steps)
+        plot_layer_3d(output_actor_1)
+        plot_layer_3d(output_actor_2)
+        plot_layer_2d(output_actor_3)
+        plot_layer_2d(output_critic_1)
+        plot_layer_2d(output_critic_2)
+        plot_layer_2d(output_critic_3)
+
+    else:
+        weights_filename = 'model_tc_{}.h5f'.format(tc)
+        agent.load_weights(weights_filename)
         agent.test(env, nb_episodes=1, visualize=True, nb_max_episode_steps=steps)
-    plot_layer_3d(output_actor_1)
-    plot_layer_3d(output_actor_2)
-    plot_layer_2d(output_actor_3)
-    plot_layer_2d(output_critic_1)
-    plot_layer_2d(output_critic_2)
-    plot_layer_2d(output_critic_3)
+
 
     # test
-    asset_list = target_assets
-    trading_cost = 0.0
-    time_cost = 0.00
-    window_length = 50
-    sample_start_date = None
-    num_assets = len(asset_list)
-    src = DataGenerator(history, asset_list, marketdate,
-                        steps=steps,
-                        window_len=window_length,
-                        start_date=sample_start_date)
-    sim = PortfolioSim(asset_names=asset_list,
-                       steps=steps,
-                       trading_cost=trading_cost,
-                       time_cost=time_cost)
+    # asset_list = target_assets
+    # trading_cost = 0.0
+    # time_cost = 0.00
+    # window_length = 50
+    # sample_start_date = None
+    # num_assets = len(asset_list)
+    # src = DataGenerator(history, asset_list, marketdate,
+    #                     steps=steps,
+    #                     window_len=window_length,
+    #                     start_date=sample_start_date)
+    # sim = PortfolioSim(asset_names=asset_list,
+    #                    steps=steps,
+    #                    trading_cost=trading_cost,
+    #                    time_cost=time_cost)
 
 
 def plot_layer_2d(mat):
@@ -383,10 +405,6 @@ def plot_layer_3d(mat):
 
 
 
-if __name__ == '__main__':
-    main2()
+# if __name__ == '__main__':
+#     main2()
 
-
-#
-# https://www.alexirpan.com/2018/02/14/rl-hard.html
-# https://himanshusahni.github.io/2018/02/23/reinforcement-learning-never-worked.html

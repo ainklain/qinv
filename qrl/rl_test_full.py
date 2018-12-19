@@ -1,11 +1,9 @@
-
+import os
 import random
 import numpy as np
 import pandas as pd
 from collections import deque
 import tensorflow as tf
-# import keras
-# from keras import backend as K
 
 from qrl.ou import OrnsteinUhlenbeck
 import gym
@@ -193,7 +191,7 @@ class DDPG(object):
         self.memory.add(s, a, r, s_, done)
 
     def _build_shared_net(self, s, scope, trainable):
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             s_reshaped = tf.reshape(s, [-1] + self.s_dim + [1])
             x = tf.layers.conv2d(s_reshaped, filters=10, kernel_size=(30, 1), trainable=trainable)
             x = tf.layers.batch_normalization(x)
@@ -206,7 +204,7 @@ class DDPG(object):
             return flattened_obs
 
     def _build_a(self, o_shared, scope, trainable):
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             x = tf.layers.dense(o_shared, 64, activation=tf.nn.relu, trainable=trainable)
             x = tf.layers.dense(x, 32, activation=tf.nn.relu, trainable=trainable)
             a = tf.layers.dense(x, self.a_dim, activation=tf.nn.softmax,
@@ -216,7 +214,7 @@ class DDPG(object):
             return tf.multiply(a, self.a_bound, name='scaled_a')
 
     def _build_c(self, o_shared, a, scope, trainable):
-        with tf.variable_scope(scope):
+        with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
             n_l1 = 30
             w1_s = tf.get_variable('w1_s', [o_shared.shape.as_list()[1], n_l1], trainable=trainable)
             w1_a = tf.get_variable('w1_a', [self.a_dim, n_l1], trainable=trainable)
@@ -233,11 +231,21 @@ def main():
     window_length = 50
     mem_size = 100
     steps = 252
+    trading_cost = -0.001
+
+    gamma = 0.9
+    tau = 0.01
+    lr_a = 0.001
+    lr_c = 0.001
+
+    batch_size = 100
+
     nb_actions = len(target_assets)
 
     max_episodes = 1
     max_ep_steps = 250
     RENDER = True
+    LOAD = True
 
     # get target history
     import copy
@@ -245,7 +253,7 @@ def main():
     target_marketdate = copy.deepcopy(marketdate)
 
     env = PortfolioEnv(target_history, target_assets, target_marketdate, steps=steps, window_length=window_length,
-                       trading_cost=0.001)
+                       trading_cost=trading_cost)
 
     a_dim = env.action_space.shape[0]
     s_dim = list(env.observation_space.shape)
@@ -255,8 +263,19 @@ def main():
     # K.set_session(sess)
     action_noise = OrnsteinUhlenbeck(mu=np.zeros(a_dim))
     memory = Memory(mem_size)
-    agent = DDPG(sess, a_dim, s_dim, a_bound=a_bound, memory=memory, gamma=0.9, tau=0.01, lr_a=0.001, lr_c=0.001, batch_size=100)
+    agent = DDPG(sess, a_dim, s_dim, a_bound=a_bound, memory=memory, gamma=gamma, tau=tau, lr_a=lr_a, lr_c=lr_c, batch_size=batch_size)
 
+
+    #Saver
+    SAVER_DIR = ""
+    saver = tf.train.Saver(max_to_keep=5)
+    checkpoint_path = os.path.join(SAVER_DIR, "model")
+    ckpt = tf.train.get_checkpoint_state(SAVER_DIR)
+
+    if LOAD:
+        saver.restore(sess, tf.train.latest_checkpoint(checkpoint_path))
+    else:
+        sess.run(tf.global_variables_initializer())
 
     for i in range(max_episodes):
         s = env.reset()
@@ -290,7 +309,14 @@ def main():
                 print('episode: {}, reward: {}'.format(i, ep_reward))
                 break
 
+        if i % 20 == 0:
+            ckpt_path = os.path.join(checkpoint_path, 'DDPG_mcost.ckpt')
+            if not os.path.exists(checkpoint_path):
+                os.mkdir(checkpoint_path)
+            save_path = saver.save(sess, ckpt_path, write_meta_graph=False)
+            print('\nSave Model %s\n' % save_path)
 
+    sess.close()
 #
 # if __name__ == '__main__':
 #     main()
