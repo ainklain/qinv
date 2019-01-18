@@ -1,7 +1,7 @@
 
-# main2(mode='train', tc='plus')
+# main2(mode='train', tc='plus', load_model=False, train_visualize=True, train_steps=10, n_episodes=10)
 # main2(mode='train', tc='zero')
-# main2(mode='train', tc='minus', load_model=False, train_visualize=False, train_steps=50, n_episodes=10)
+# main2(mode='train', tc='minus', load_model=True, train_visualize=False, train_steps=10, n_episodes=10)
 
 
 import numpy as np
