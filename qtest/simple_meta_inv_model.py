@@ -55,43 +55,67 @@ args = Argument()
 
 
 class DataGenerator(object):
-    def __init__(self, num_samples_per_class, batch_size, config={}):
+    def __init__(self, batch_size, config={}):
         self.batch_size = batch_size
-        self.num_samples_per_class = num_samples_per_class
+        # self.num_samples_per_class = num_samples_per_class
         self.num_classes = 1
+        self.rebal_counter = 0
+        self.universe = list()
 
         if args.datasource == 'momentum':
             self.idx_list = config.get('idx_list', args.idx_list)
             self.dim_input = config.get('num_timesteps', args.num_timesteps)
             self.dim_output = 1
 
-        self.get_data_from_db()
+        self._get_data_from_db()
 
-    def make_data_tensor(self, universe, start_d, end_d, train=True):
+    def make_data_tensor(self, base_d, train=True, normalize=True):
         if train:
-            return_df = self.data_df[self.data_df.idx_cd.isin(universe) &
-                                     (self.data_df.date_0 >= start_d) & (self.data_df.date_0 < end_d)]
+            start_d = self.dates[max(self.dates.index(base_d) - 120, 0)]
+            end_d = self.dates[self.dates.index(base_d) - 24]
+            where_data = (self.data_df.date_0 >= start_d) & (self.data_df.date_0 <= end_d)
 
+            self.universe = list()
+            if (self.rebal_counter == 0) or (datetime.datetime.strptime(base_d, '%Y-%m-%d').month == 12):
+                for idx in self.idx_list:
+                    if (idx != 'KISCOMPBONDCALL') and len(self.data_df[(self.data_df.idx_cd == idx) & where_data]) >= 36:
+                        self.universe.append(idx)
+                self.rebal_counter = self.rebal_counter + 1
 
-    def get_data_from_db(self):
+        else:
+            start_d = self.dates[self.dates.index(base_d) - 12]
+            end_d = base_d
+            where_data = (self.data_df.date_0 >= start_d) & (self.data_df.date_0 <= end_d)
+
+        # 첫번째 또는 12월말 기준 모델 재학습
+
+        dataset = self.data_df[self.data_df.idx_cd.isin(self.universe) & where_data].sample(self.batch_size, random_state=1234)
+        data_tensor = np.array(dataset[self.columns_data[:-1]])
+        label_tensor = np.array(dataset[self.columns_data[-1]] - dataset[self.columns_data[-2]])
+
+        if normalize:
+            data_tensor = (data_tensor - np.mean(data_tensor, axis=1, keepdims=True)) \
+                          / np.std(data_tensor, axis=1, ddof=1, keepdims=True)
+
+        return data_tensor, label_tensor
+
+    def _get_data_from_db(self):
         df = pd.read_csv('logp.csv')
 
         timesteps = self.dim_input
         df_pivoted = df.pivot(index='eval_d', columns='idx_cd', values='log_p')
-        data_df = pd.DataFrame(columns=['idx_cd', 'date_0'] + ['t{}'.format(i-timesteps+1) for i in range(timesteps+1)])
+        self.dates = list(df_pivoted.index)
+        self.columns_data = ['t{}'.format(i - timesteps + 1) for i in range(timesteps + 1)]
+        self.data_df = pd.DataFrame(columns=['idx_cd', 'date_0'] + self.columns_data)
 
-        n_date = len(df_pivoted.index)
         for idx in self.idx_list:
             df_idx = df_pivoted[idx]
-            for k in range(timesteps, n_date):
+            for k in range(timesteps, len(self.dates)):
                 added_row = [i for i in df_idx[(k - timesteps): (k + 1)]]
                 if np.sum(np.isnan(added_row)) == 0:
-                    data_df = data_df.append(pd.DataFrame([[idx, df_idx.index[k - 1]] + added_row],
-                                                          columns=list(data_df.columns)), ignore_index=True)
-
-        self.data_df = data_df
-
-
+                    self.data_df = self.data_df.append(
+                        pd.DataFrame([[idx, df_idx.index[k - 1]] + added_row],
+                                     columns=list(self.data_df.columns)), ignore_index=True)
 
 
 def get_accuracy(bool_arr, bool_arr_true):
@@ -185,12 +209,12 @@ class MAML:
             else:
                 self.weights = weights = self.construct_weights()
 
-            support_losses, support_preds, query_losses, query_preds = [], [], [], []
-            support_accs, query_accs = [], []
             num_updates = max(self.test_num_updates, self.test_num_updates)  # max(self.test_num_updates, FLAGS.num_updates)
-            query_preds = [[]] * num_updates
-            query_losses = [[]] * num_updates
-            query_accs = [[]] * num_updates
+            # support_losses, support_preds, query_losses, query_preds = [], [], [], []
+            # support_accs, query_accs = [], []
+            # query_preds = [[]] * num_updates
+            # query_losses = [[]] * num_updates
+            # query_accs = [[]] * num_updates
 
             def task_metalearn(input_data, reuse=True):
                 support_x, support_y, query_x, query_y = input_data
@@ -253,10 +277,9 @@ class MAML:
             else:
                 support_preds, query_preds, support_losses, query_losses = result
 
-
         if 'train' in prefix:
             self.total_loss1 = total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
-            self.total_losses2 = total_lossses2 = [tf.reduce_mean(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+            self.total_losses2 = total_losses2 = [tf.reduce_mean(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
 
             self.support_preds, self.query_preds = support_preds, query_preds
             if self.classification:
@@ -520,113 +543,43 @@ def mata_main():
 
 
 
-
-
-
-
-
-
-
-
-
-
 is_train=True
 def main(is_train=True):
-    # idx_list = ['MSCIWORLD', 'MSCIEM', 'KOSPI200', 'KOSDAQ150', 'SPX500', 'NASDAQ100', 'RUSSELL2000',
-    #             'CSI300', 'HSCE', 'TOPIX100', 'MSCIUSREITTR', 'USDKRW', 'GSCIGOLD', 'KISCOMPBONDCALL']
-
-    idx_list = ['KOSPI200', 'KISCOMPBONDCALL']
-
-    timesteps = 12  # 12 months data
-    input_dim = 1   # monthly return
-
     # data processing
-    df = get_data(idx_list)
+    data_generator = DataGenerator(args.meta_batch_size)
 
-    df_logp = df.pivot(index='eval_d', columns='idxcd', values='log_p')
-    df_pivoted = df.pivot(index='eval_d', columns='idxcd', values='y')
-    data_df = pd.DataFrame(columns=['idx_cd', 'date_0'] + ['t{}'.format(i - timesteps + 1) for i in range(timesteps + 1)])
-    data_df_logp = pd.DataFrame(columns=['idx_cd', 'date_0'] + ['t{}'.format(i - timesteps + 1) for i in range(timesteps + 1)])
-    n_date = len(df_pivoted.index)
-    for idx in idx_list:
-        df_idx = df_pivoted[idx]
-        df_idx_logp = df_logp[idx]
-        for k in range(timesteps, n_date):
-            added_row = [i for i in df_idx[(k - timesteps): (k+1)]]
-            added_row_logp = [i for i in df_idx_logp[(k - timesteps): k]] + [df_idx[k]]
-            if np.sum(np.isnan(added_row)) == 0:
-                data_df = data_df.append(pd.DataFrame([[idx, df_idx.index[k-1]] + added_row],
-                                     columns=list(data_df.columns)), ignore_index=True)
-            if np.sum(np.isnan(added_row_logp)) == 0:
-                data_df_logp = data_df_logp.append(pd.DataFrame([[idx, df_idx_logp.index[k-1]] + added_row_logp],
-                                     columns=list(data_df.columns)), ignore_index=True)
+    if args.datasource == 'momentum':
+        tf_data_load = True
+        num_classes = data_generator.num_classes
+        num_dates = len(data_generator.dates)
+        idx_list = args.idx_list
+    else:
+        tf_data_load = False
+        input_tensors = None
+        num_dates = None
 
-    assert data_df.shape == data_df_logp.shape
 
     tb_acc = TensorBoard(log_dir="./graph", histogram_freq=0, write_graph=True, write_images=True)
     early_stopping = EarlyStopping(patience=10)
+
     # training and backtesting
     columns_for_store = ['date_', 'port_y', 'port_bm_y', 'bm_all_y', 'bond_y', 'n_risk', 'bm_n_risk', 'bond_wgt', 'acc', 'bm_acc', 'precision', 'bm_precision', 'recall', 'bm_recall']
     portfolio_df = pd.DataFrame(columns=columns_for_store)
     constituent_df = pd.DataFrame(columns=['date_', 'port'] + idx_list)
-    for i, t in enumerate(range(120, n_date - 1)):
-        train_start_d, valid_start_d, test_d = df_pivoted.index[t - 120], df_pivoted.index[t - 24], df_pivoted.index[t]
 
-        print('{}. {} started.'.format(i, test_d))
-        # 첫번째 또는 12월말 기준 모델 재학습
-        if (i == 0) or (datetime.datetime.strptime(test_d, '%Y-%m-%d').month == 12):
-            # 12월말 기준 3년이상 레코드가 있는 자산들 선택 (1년이상 트레이닝 기간 / 2년 평가기간)
-            universe = list()
-            bond_y = 0.
-            for idx in idx_list:
-                if len(data_df[(data_df.idx_cd == idx) & (data_df.date_0 >= train_start_d) & (data_df.date_0 < test_d)]) >= 36:
-                    if idx != 'KISCOMPBONDCALL':
-                        universe.append(idx)
+    dim_input = data_generator.dim_input
+    dim_output = data_generator.dim_output
+    model = MAML(dim_input, dim_output, test_num_updates=args.meta_batch_size)
 
-            print('{}. {} Universe selected.'.format(i, test_d))
-            train_df = data_df[data_df.idx_cd.isin(universe) & (data_df.date_0 >= train_start_d) & (data_df.date_0 < valid_start_d)]
-            valid_df = data_df[data_df.idx_cd.isin(universe) & (data_df.date_0 >= valid_start_d) & (data_df.date_0 < test_d)]
+    for t in range(120, num_dates - 1):
+        base_d = data_generator.dates[t]
 
-            train_df_logp = data_df_logp[data_df_logp.idx_cd.isin(universe) & (data_df_logp.date_0 >= train_start_d) & (data_df_logp.date_0 < valid_start_d)]
-            valid_df_logp = data_df_logp[data_df_logp.idx_cd.isin(universe) & (data_df_logp.date_0 >= valid_start_d) & (data_df_logp.date_0 < test_d)]
+        support_x, support_y = data_generator.make_data_tensor(base_d)
+        query_x, query_y = data_generator.make_data_tensor(base_d, train=False)
+        input_tensors = {'support_x': support_x, 'query_x': query_x, 'support_y': support_y, 'query_y': query_y}
 
+        model.construct_model(input_tensors=input_tensors, prefix='metatrain_')
 
-            train_data_orig = np.array(train_df_logp.ix[:, 2:-1])
-            train_data = (train_data_orig - np.expand_dims(np.mean(train_data_orig, axis=1), axis=1)) \
-                         / np.expand_dims(np.std(train_data_orig, axis=1, ddof=1), axis=1)
-            train_label = np.array(train_df_logp.ix[:, -1:] >= -0.00) * 1
-
-            valid_data_orig = np.array(valid_df_logp.ix[:, 2:-1])
-            valid_data = (valid_data_orig - np.expand_dims(np.mean(valid_data_orig, axis=1), axis=1)) \
-                         / np.expand_dims(np.std(valid_data_orig, axis=1, ddof=1), axis=1)
-            valid_label = np.array(valid_df_logp.ix[:, -1:] >= -0.00) * 1
-
-            print('{}. {} Input Data Processed.'.format(i, test_d))
-            with K.tf.device('/gpu:0'):
-                input_p = Input(shape=(timesteps,), name='input_p')
-                x = Dense(64, activation='relu', kernel_initializer='glorot_normal')(input_p)
-                x = BatchNormalization()(x)
-                x = Dense(32, activation='relu', kernel_initializer='glorot_normal')(x)
-                x = BatchNormalization()(x)
-                x = Dense(16, activation='linear', kernel_initializer='glorot_normal')(x)
-                main_output = Dense(1, activation='sigmoid', name='output')(x)
-
-                model = Model(inputs=[input_p], outputs=main_output)
-
-                model.compile(optimizer='adam',
-                              loss='binary_crossentropy',
-                              metrics=['acc'])
-
-                if is_train is True:
-                    model.fit([train_data], train_label,
-                              epochs=200,
-                              batch_size=128,
-                              shuffle=True,
-                              class_weight={0: np.sum(train_label == 1), 1: np.sum(train_label == 0)},
-                              validation_data=[[valid_data], valid_label],
-                              callbacks=[tb_acc])  # starts training
-
-                    print('{}. {} Final Model trained.'.format(i, test_d))
 
         test_df = data_df[data_df.idx_cd.isin(universe) & (data_df.date_0 == test_d)]
         test_data_y = np.array(test_df.ix[:, 2:-1])
