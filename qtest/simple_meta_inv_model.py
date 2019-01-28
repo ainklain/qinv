@@ -12,14 +12,6 @@ import matplotlib.pyplot as plt
 
 from tensorflow.contrib.layers.python import layers as tf_layers
 
-import keras
-from keras.models import Sequential, Model
-from keras.layers import Dense, LSTM, BatchNormalization, Input, RepeatVector
-from keras.optimizers import Adam
-from keras.callbacks import EarlyStopping, TensorBoard
-from keras import backend as K
-
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--datasource', default='momentum')
 
@@ -27,14 +19,17 @@ parser.add_argument('--datasource', default='momentum')
 class Argument:
     def __init__(self):
         self.datasource = 'momentum'
-        self.idx_list = ['MSCIWORLD', 'MSCIEM', 'KOSPI200', 'KOSDAQ150', 'SPX500', 'NASDAQ100', 'RUSSELL2000',
-                    'CSI300', 'HSCE', 'TOPIX100', 'MSCIUSREITTR', 'USDKRW', 'GSCIGOLD', 'KISCOMPBONDCALL']
+        # self.idx_list = ['MSCIWORLD', 'MSCIEM', 'KOSPI200', 'KOSDAQ150', 'SPX500', 'NASDAQ100', 'RUSSELL2000',
+        #             'CSI300', 'HSCE', 'TOPIX100', 'MSCIUSREITTR', 'USDKRW', 'GSCIGOLD', 'KISCOMPBONDCALL']
+        self.idx_list = ['MSCIWORLD', 'KISCOMPBONDCALL']
+
 
         self.num_timesteps = 12
         self.stop_grad = True
         self.meta_batch_size = 25
         self.update_batch_size = 5
         self.train = True
+        # self.test_set = False
         self.train_update_batch_size = -1
         self.train_update_lr = -1
         self.update_lr = 1e-3
@@ -43,11 +38,12 @@ class Argument:
         self.num_filters = 64
         self.max_pool = False
         self.baseline = None
-        self.norm = None
+        self.norm = 'None'
         self.resume = True
         self.logdir = '/tmp/data'
         self.test_iter = -1
         self.pretrain_iterations = 0
+        self.metatrain_iterations = 15000
         self.meta_batch_size = 25
         self.log = True
 
@@ -69,27 +65,33 @@ class DataGenerator(object):
 
         self._get_data_from_db()
 
-    def make_data_tensor(self, base_d, train=True, normalize=True):
+    def make_data_tensor(self, base_d, train=True, test_set=False, normalize=True):
         if train:
             start_d = self.dates[max(self.dates.index(base_d) - 120, 0)]
-            end_d = self.dates[self.dates.index(base_d) - 24]
+            end_d = self.dates[self.dates.index(base_d) - 36]
             where_data = (self.data_df.date_0 >= start_d) & (self.data_df.date_0 <= end_d)
 
             self.universe = list()
             if (self.rebal_counter == 0) or (datetime.datetime.strptime(base_d, '%Y-%m-%d').month == 12):
                 for idx in self.idx_list:
-                    if (idx != 'KISCOMPBONDCALL') and len(self.data_df[(self.data_df.idx_cd == idx) & where_data]) >= 36:
+                    if (idx.lower() != 'kiscompbondcall') and len(self.data_df[(self.data_df.idx_cd == idx) & where_data]) >= 24:
                         self.universe.append(idx)
                 self.rebal_counter = self.rebal_counter + 1
 
+            dataset = self.data_df[self.data_df.idx_cd.isin(self.universe) & where_data].sample(self.batch_size, random_state=1234)
         else:
-            start_d = self.dates[self.dates.index(base_d) - 12]
-            end_d = base_d
-            where_data = (self.data_df.date_0 >= start_d) & (self.data_df.date_0 <= end_d)
+            if test_set:
+                start_d = self.dates[self.dates.index(base_d) - 11]
+                end_d = base_d
+                where_data = (self.data_df.date_0 >= start_d) & (self.data_df.date_0 <= end_d)
+            else:
+                start_d = self.dates[self.dates.index(base_d) - 35]
+                end_d = self.dates[self.dates.index(base_d) - 12]
+                where_data = (self.data_df.date_0 >= start_d) & (self.data_df.date_0 <= end_d)
 
+            dataset = self.data_df[self.data_df.idx_cd.isin(self.universe) & where_data]
         # 첫번째 또는 12월말 기준 모델 재학습
 
-        dataset = self.data_df[self.data_df.idx_cd.isin(self.universe) & where_data].sample(self.batch_size, random_state=1234)
         data_tensor = np.array(dataset[self.columns_data[:-1]])
         label_tensor = np.array(dataset[self.columns_data[-1]] - dataset[self.columns_data[-2]])
 
@@ -139,7 +141,9 @@ def normalize(inputs, activation, reuse, scope):
 
 
 def xent(pred, label):
-    return tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=label) / args.update_batch_size
+    pred = tf.reshape(pred, [-1])
+    label = tf.reshape(label, [-1])
+    return tf.nn.softmax_cross_entropy_with_logits_v2(logits=pred, labels=label) / args.update_batch_size
 
 
 def mse(pred, label):
@@ -148,13 +152,13 @@ def mse(pred, label):
     return tf.reduce_mean(tf.square(pred-label))
 
 
-# Define our custom loss function
-def focal_loss(y_true, y_pred):
-    gamma = 2.0
-    alpha = 0.25
-    pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
-    pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
-    return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1))-K.sum((1-alpha) * K.pow( pt_0, gamma) * K.log(1. - pt_0))
+# # Define our custom loss function
+# def focal_loss(y_true, y_pred):
+#     gamma = 2.0
+#     alpha = 0.25
+#     pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
+#     pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
+#     return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1))-K.sum((1-alpha) * K.pow( pt_0, gamma) * K.log(1. - pt_0))
 
 
 def get_result(df):
@@ -177,7 +181,7 @@ class MAML:
     def __init__(self, dim_input, dim_output, meta_lr=1e-3, train_lr=1e-2, test_num_updates=5):
         self.dim_input = dim_input
         self.dim_output = dim_output
-        self.meta_lr = meta_lr
+        self.meta_lr = tf.placeholder_with_default(meta_lr, ())
         self.train_lr = train_lr
         self.test_num_updates = test_num_updates
 
@@ -190,32 +194,22 @@ class MAML:
         else:
             raise ValueError('Unrecognized data source.')
 
-    def construct_model(self, input_tensors=None, prefix='metatrain_'):
-        if input_tensors is None:
-            self.support_x = tf.placeholder(tf.float32)
-            self.support_y = tf.placeholder(tf.float32)
-            self.query_x = tf.placeholder(tf.float32)
-            self.query_y = tf.placeholder(tf.float32)
-        else:
-            self.support_x = input_tensors['support_x']
-            self.support_y = input_tensors['support_y']
-            self.query_x = input_tensors['query_x']
-            self.query_y = input_tensors['query_y']
+    def construct_model(self):
+        self.support_x = tf.placeholder(tf.float32, shape=[None, self.dim_input])
+        self.support_y = tf.placeholder(tf.float32, shape=[None, 1])
+        self.query_x = tf.placeholder(tf.float32, shape=[None, self.dim_input])
+        self.query_y = tf.placeholder(tf.float32, shape=[None, 1])
 
-        with tf.variable_scope('model', reuse=False) as training_scope:
+        with tf.variable_scope('model', reuse=None) as training_scope:
             if 'weights' in dir(self):
+                print("1")
                 training_scope.reuse_variables()
                 weights = self.weights
             else:
+                print("2")
                 self.weights = weights = self.construct_weights()
 
-            num_updates = max(self.test_num_updates, self.test_num_updates)  # max(self.test_num_updates, FLAGS.num_updates)
-            # support_losses, support_preds, query_losses, query_preds = [], [], [], []
-            # support_accs, query_accs = [], []
-            # query_preds = [[]] * num_updates
-            # query_losses = [[]] * num_updates
-            # query_accs = [[]] * num_updates
-
+            num_updates = self.test_num_updates
             def task_metalearn(input_data, reuse=True):
                 support_x, support_y, query_x, query_y = input_data
                 task_query_preds, task_query_losses = [], []
@@ -226,13 +220,13 @@ class MAML:
                 task_support_pred = self.forward(support_x, weights, reuse=reuse)
                 task_support_loss = self.loss_func(task_support_pred, support_y)
 
-                grads = tf.gradients(task_support_loss, list(weights.values))
+                grads = tf.gradients(task_support_loss, list(weights.values()))
                 if args.stop_grad:
                     grads = [tf.stop_gradient(grad) for grad in grads]
 
                 gradients = dict(zip(weights.keys(), grads))
                 fast_weights = dict(zip(weights.keys(),
-                                        [weights[key] - self.update_lr * gradients[key] for key in weights.keys()]))
+                                        [weights[key] - self.train_lr * gradients[key] for key in weights.keys()]))
 
                 query_pred = self.forward(query_x, fast_weights, reuse=True)
                 task_query_preds.append(query_pred)
@@ -245,7 +239,7 @@ class MAML:
                         grads = [tf.stop_gradient(grad) for grad in grads]
                     gradients = dict(zip(fast_weights.keys(), grads))
                     fast_weights = dict(zip(fast_weights.keys(),
-                                            [fast_weights[key] - self.update_lr * gradients[key] for key in fast_weights.keys()]))
+                                            [fast_weights[key] - self.train_lr * gradients[key] for key in fast_weights.keys()]))
 
                     query_pred = self.forward(query_x, fast_weights, reuse=True)
                     task_query_preds.append(query_pred)
@@ -269,7 +263,8 @@ class MAML:
             out_dtype = [tf.float32, [tf.float32] * num_updates, tf.float32, [tf.float32] * num_updates]
             if self.classification:
                 out_dtype.extend([tf.float32, [tf.float32] * num_updates])
-            result = tf.map_fn(task_metalearn, elems=(self.support_x, self.query_x, self.support_y, self.query_y),
+
+            result = tf.map_fn(task_metalearn, elems=(self.support_x, self.support_y, self.query_x, self.query_y),
                                dtype=out_dtype,
                                parallel_iterations=args.meta_batch_size)
             if self.classification:
@@ -277,27 +272,27 @@ class MAML:
             else:
                 support_preds, query_preds, support_losses, query_losses = result
 
-        if 'train' in prefix:
-            self.total_loss1 = total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
-            self.total_losses2 = total_losses2 = [tf.reduce_mean(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+        # if 'train' in prefix:
+        self.total_loss1 = total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
+        self.total_losses2 = total_losses2 = [tf.reduce_mean(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
 
-            self.support_preds, self.query_preds = support_preds, query_preds
-            if self.classification:
-                self.total_acc1 = total_acc1 = tf.reduce_sum(support_accs) / tf.to_float(args.meta_batch_size)
-                self.total_accs2 = total_accs2 = [tf.reduce_sum(query_accs[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
-            self.pretrain_op = tf.train.AdamOptimizer(self.meta_lr).minimize(total_loss1)
+        self.support_preds, self.query_preds = support_preds, query_preds
+        if self.classification:
+            self.total_acc1 = total_acc1 = tf.reduce_sum(support_accs) / tf.to_float(args.meta_batch_size)
+            self.total_accs2 = total_accs2 = [tf.reduce_sum(query_accs[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+        self.pretrain_op = tf.train.AdamOptimizer(self.meta_lr).minimize(total_loss1)
 
-            if args.metatrain_iterations > 0:
-                optimizer = tf.train.AdamOptimizer(self.meta_lr)
-                self.gvs = gvs = optimizer.compute_gradients(self.total_losses2[args.num_updates - 1])
-                self.metatrain_op = optimizer.apply_gradients(gvs)
-        else:
-            self.metaval_total_loss1 = total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
-            self.metaval_total_losses2 = total_losses2 = [tf.reduce_sum(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
-            if self.classification:
-                self.metaval_total_acc1 = total_acc1 = tf.reduce_sum(support_accs) / tf.to_float(args.meta_batch_size)
-                self.metaval_total_accs2 = total_accs2 = [tf.reduce_sum(query_accs[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
-
+        if args.metatrain_iterations > 0:
+            optimizer = tf.train.AdamOptimizer(self.meta_lr)
+            self.gvs = gvs = optimizer.compute_gradients(self.total_losses2[args.num_updates - 1])
+            self.metatrain_op = optimizer.apply_gradients(gvs)
+        # else:
+        #     self.metaval_total_loss1 = total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
+        #     self.metaval_total_losses2 = total_losses2 = [tf.reduce_sum(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+        #     if self.classification:
+        #         self.metaval_total_acc1 = total_acc1 = tf.reduce_sum(support_accs) / tf.to_float(args.meta_batch_size)
+        #         self.metaval_total_accs2 = total_accs2 = [tf.reduce_sum(query_accs[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+        prefix = 'train_'
         tf.summary.scalar(prefix + 'Pre-update loss', total_loss1)
         if self.classification:
             tf.summary.scalar(prefix+'Pre-update accuracy', total_acc1)
@@ -307,19 +302,19 @@ class MAML:
             if self.classification:
                 tf.summary.scalar(prefix + 'Post-update accuracy, step ' + str(j+1), total_accs2[j])
 
-
     def construct_fc_weights(self):
         weights = {}
         weights['w1'] = tf.Variable(tf.truncated_normal([self.dim_input, self.dim_hidden[0]], stddev=0.01))
         weights['b1'] = tf.Variable(tf.zeros([self.dim_hidden[0]]))
-        for i in range(1, len(self.dim_hidden[0])):
+        for i in range(1, len(self.dim_hidden)):
             weights['w' + str(i + 1)] = tf.Variable(tf.truncated_normal([self.dim_hidden[i-1], self.dim_hidden[i]], stddev=0.01))
             weights['b' + str(i + 1)] = tf.Variable(tf.zeros([self.dim_hidden[i]]))
         weights['w' + str(len(self.dim_hidden) + 1)] = tf.Variable(tf.truncated_normal([self.dim_hidden[-1], self.dim_output], stddev=0.01))
-        weights['w' + str(len(self.dim_hidden) + 1)] = tf.Variable(tf.zeros([self.dim_output]))
+        weights['b' + str(len(self.dim_hidden) + 1)] = tf.Variable(tf.zeros([self.dim_output]))
         return weights
 
     def forward_fc(self, input_data, weights, reuse=False):
+        input_data = tf.reshape(input_data, [-1, self.dim_input])
         hidden = normalize(tf.matmul(input_data, weights['w1']) + weights['b1'], activation=tf.nn.relu, reuse=reuse, scope='0')
         for i in range(1, len(self.dim_hidden)):
             hidden = normalize(tf.matmul(hidden, weights['w' + str(i+1)]) + weights['b' + str(i+1)],
@@ -327,8 +322,7 @@ class MAML:
         return tf.matmul(hidden, weights['w' + str(len(self.dim_hidden) + 1)]) + weights['b' + str(len(self.dim_hidden) + 1)]
 
 
-
-def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
+def train(model, saver, sess, base_d, exp_string, data_generator, resume_itr=0):
     SUMMARY_INTERVAL = 100
     SAVE_INTERVAL = 1000
     if args.datasource == 'momentum':
@@ -347,18 +341,22 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
     multitask_weights, reg_weights = [], []
 
     for itr in range(resume_itr, args.pretrain_iterations + args.metatrain_iterations):
-        feed_dict = {}
+        data_tensor, label_tensor = data_generator.make_data_tensor(base_d)
+        feed_dict = {model.support_x: data_tensor[:int(len(data_tensor) * 0.6)],
+                     model.support_y: label_tensor[:int(len(label_tensor) * 0.6)],
+                     model.query_x: data_tensor[int(len(data_tensor) * 0.6):],
+                     model.query_y: label_tensor[int(len(label_tensor) * 0.6):]}
         if itr < args.pretrain_iterations:
-            input_tensors = [model.pretrain_op]
+            ops = [model.pretrain_op]
         else:
-            input_tensors = [model.metatrain_op]
+            ops = [model.metatrain_op]
 
         if (itr % SUMMARY_INTERVAL == 0 or itr % PRINT_INTERVAL == 0):
-            input_tensors.extend([model.summ_op, model.total_loss1, model.total_losses2[args.num_updates - 1]])
+            ops.extend([model.summ_op, model.total_loss1, model.total_losses2[args.num_updates - 1]])
             if model.classification:
-                input_tensors.extend([model.total_acc1, model.total_accs2[args.num_updates - 1]])
+                ops.extend([model.total_acc1, model.total_accs2[args.num_updates - 1]])
 
-        result = sess.run(input_tensors, feed_dict)
+        result = sess.run(ops, feed_dict=feed_dict)
 
         if itr % SUMMARY_INTERVAL == 0:
             prelosses.append(result[-2])
@@ -379,20 +377,25 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
             saver.save(sess, args.logdir + '/' + exp_string + '/model' + str(itr))
 
         if (itr != 0) and itr % TEST_PRINT_INTERVAL == 0:
-            feed_dict = {}
             if model.classification:
-                input_tensors = [model.metaval_total_acc1, model.metaval_total_accs2[args.num_updates - 1], model.summ_op]
+                ops = [model.metaval_total_acc1, model.metaval_total_accs2[args.num_updates - 1], model.summ_op]
             else:
-                input_tensors = [model.metaval_total_loss1, model.metaval_total_losses2[args.num_updates - 1], model.summ_op]
+                ops = [model.metaval_total_loss1, model.metaval_total_losses2[args.num_updates - 1], model.summ_op]
 
-            result = sess.run(input_tensors, feed_dict)
+            data_tensor, label_tensor = data_generator.make_data_tensor(base_d, train=False)
+            feed_dict = {model.support_x: data_tensor[:int(len(data_tensor) * 0.6)],
+                         model.support_y: label_tensor[:int(len(label_tensor) * 0.6)],
+                         model.query_x: data_tensor[int(len(data_tensor) * 0.6):],
+                         model.query_y: label_tensor[int(len(label_tensor) * 0.6):]}
+
+            result = sess.run(ops, feed_dict=feed_dict)
             print('Validation result: ' + str(result[0]) + ', ' + str(result[1]))
 
     saver.save(sess, args.logdir + '/' + exp_string + '/model' + str(itr))
 
 NUM_TEST_POINTS = 600
 
-def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
+def test(model, saver, sess, base_d, exp_string, data_generator, test_num_updates=None):
     num_classes = data_generator.num_classes
 
     np.random.seed(1234)
@@ -401,7 +404,12 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
     metaval_accs = []
 
     for _ in range(NUM_TEST_POINTS):
-        feed_dict = {model.meta_lr: 0.0}
+        data_tensor, label_tensor = data_generator.make_data_tensor(base_d, train=False, test_set=True)
+        feed_dict = {model.support_x: data_tensor[:-1],
+                     model.support_y: label_tensor[:-1],
+                     model.query_x: data_tensor[-1:],
+                     model.query_y: label_tensor[-1:],
+                     model.meta_lr: 0.0}
 
         if model.classification:
             result = sess.run([model.metaval_total_acc1] + model.metaval_total_accs2, feed_dict)
@@ -429,9 +437,6 @@ def test(model, saver, sess, exp_string, data_generator, test_num_updates=None):
         writer.writerow(ci95)
 
 
-
-
-
 def mata_main():
     if args.datasource == 'momentum':
         if args.train:
@@ -447,7 +452,6 @@ def mata_main():
         data_generator = DataGenerator(args.update_batch_size * 2, args.meta_batch_size)
     else:
         data_generator = DataGenerator(args.update_batch_size * 2, args.meta_batch_size)
-
 
     dim_input = data_generator.dim_input
     dim_output = data_generator.dim_output
@@ -539,8 +543,28 @@ def mata_main():
         test(model, saver, sess, exp_string, data_generator, test_num_updates)
 
 
+def get_exp_string():
+    exp_string = 'cls_' + str(args.num_classes) + '.mbs_' + str(args.meta_batch_size) + \
+                 '.ubs_' + str(args.train_update_batch_size) + '.numstep' + str(args.num_updates) + \
+                 '.updatelr' + str(args.train_update_lr)
 
-
+    if args.num_filters != 64:
+        exp_string += 'hidden' + str(args.num_filters)
+    if args.max_pool:
+        exp_string += 'maxpool'
+    if args.stop_grad:
+        exp_string += 'stopgrad'
+    if args.baseline:
+        exp_string += args.baseline
+    if args.norm == 'batch_norm':
+        exp_string += 'batchnorm'
+    elif args.norm == 'layer_norm':
+        exp_string += 'layernorm'
+    elif args.norm == 'None':
+        exp_string += 'nonorm'
+    else:
+        print('Norm setting not recognized.')
+    return exp_string
 
 
 is_train=True
@@ -558,10 +582,6 @@ def main(is_train=True):
         input_tensors = None
         num_dates = None
 
-
-    tb_acc = TensorBoard(log_dir="./graph", histogram_freq=0, write_graph=True, write_images=True)
-    early_stopping = EarlyStopping(patience=10)
-
     # training and backtesting
     columns_for_store = ['date_', 'port_y', 'port_bm_y', 'bm_all_y', 'bond_y', 'n_risk', 'bm_n_risk', 'bond_wgt', 'acc', 'bm_acc', 'precision', 'bm_precision', 'recall', 'bm_recall']
     portfolio_df = pd.DataFrame(columns=columns_for_store)
@@ -570,24 +590,61 @@ def main(is_train=True):
     dim_input = data_generator.dim_input
     dim_output = data_generator.dim_output
     model = MAML(dim_input, dim_output, test_num_updates=args.meta_batch_size)
+    model.construct_model()
+
+    model.summ_op = tf.summary.merge_all()
+
+    saver = loader = tf.train.Saver(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES), max_to_keep=5)
+
+    sess = tf.InteractiveSession()
+
+
+    if args.train_update_batch_size == -1:
+        args.train_update_batch_size = args.update_batch_size
+    if args.train_update_lr == -1:
+        args.train_update_lr = args.update_lr
+
+    exp_string = get_exp_string()
+
+    resume_itr = 0
+    model_file = None
+
+    tf.global_variables_initializer().run()
+    # tf.train.start_queue_runners()
+
+    if args.resume or not args.train:
+        model_file = tf.train.latest_checkpoint(args.logdir + '/' + exp_string)
+        if args.test_iter > 0:
+            model_file = model_file[:model_file.index('model')] + 'model' + str(args.test_iter)
+        if model_file:
+            ind1 = model_file.index('model')
+            resume_itr = int(model_file[ind1+5:])
+            print('Restoring model weights from ' + model_file)
+            saver.restore(sess, model_file)
+
 
     for t in range(120, num_dates - 1):
         base_d = data_generator.dates[t]
 
-        support_x, support_y = data_generator.make_data_tensor(base_d)
-        query_x, query_y = data_generator.make_data_tensor(base_d, train=False)
-        input_tensors = {'support_x': support_x, 'query_x': query_x, 'support_y': support_y, 'query_y': query_y}
+        data_tensor, label_tensor = data_generator.make_data_tensor(base_d)
+        input_tensors = {'support_x': data_tensor[:int(len(data_tensor) * 0.6)],
+                         'query_x': data_tensor[int(len(data_tensor) * 0.6):],
+                         'support_y': label_tensor[:int(len(label_tensor) * 0.6)],
+                         'query_y': label_tensor[int(len(label_tensor) * 0.6):]}
 
-        model.construct_model(input_tensors=input_tensors, prefix='metatrain_')
+        test_data_tensor, test_label_tensor = data_generator.make_data_tensor(base_d, train=False)
+
+        train = True
+        train(model, saver, sess, base_d, exp_string, data_generator, resume_itr)
+
+        train = False
+        test(model, saver, sess, exp_string, data_generator, test_num_updates)
+        if train is False:
+            args.meta_batch_size = orig_meta_batch_size
 
 
-        test_df = data_df[data_df.idx_cd.isin(universe) & (data_df.date_0 == test_d)]
-        test_data_y = np.array(test_df.ix[:, 2:-1])
 
-        test_df_logp = data_df_logp[data_df_logp.idx_cd.isin(universe) & (data_df_logp.date_0 == test_d)]
-        test_data_orig = np.array(test_df_logp.ix[:, 2:-1])
-        test_data = (test_data_orig - np.expand_dims(np.mean(test_data_orig, axis=1), axis=1)) \
-                    / np.expand_dims(np.std(test_data_orig, axis=1, ddof=1), axis=1)
+
 
 
         # bond_y = data_df[(data_df.idx_cd == 'KISCOMPBONDCALL') & (data_df.date_0 == test_d)].t1.values[0]
