@@ -1,3 +1,6 @@
+# issue :   meta_batch_size 로 accuracies를 계산하는데 data_generator에서 산출되는 인풋개수가 support/query로 나뉘다보니 개수 안맞음.
+#           train / valid set 간 개수 잘 맞춰야할것
+
 from qdata.dbmanager import SqlManager
 
 import argparse
@@ -25,7 +28,7 @@ class Argument:
 
         self.num_timesteps = 12
         self.stop_grad = True
-        self.meta_batch_size = 25
+        self.meta_batch_size = 32
         self.update_batch_size = 1      # K for K-shot learning
         self.train = True
         # self.test_set = False
@@ -43,7 +46,6 @@ class Argument:
         self.test_iter = -1
         self.pretrain_iterations = 0
         self.metatrain_iterations = 15000
-        self.meta_batch_size = 25
         self.log = True
 
 args = Argument()
@@ -83,9 +85,9 @@ class DataGenerator(object):
 
             # positive / negative data balancing
             is_positive_y = (dataset_unbalanced.t1 - dataset_unbalanced.t0 >= 0)
-            dataset = pd.concat([dataset_unbalanced[is_positive_y].sample(int(batch_size / 2), random_state=1234),
-                                 dataset_unbalanced[~is_positive_y].sample(int(batch_size / 2), random_state=1234)],
-                                ignore_index=True).sample(int(batch_size / 2) * 2, random_state=1234).reset_index(drop=True)
+            dataset = pd.concat([dataset_unbalanced[is_positive_y].sample(int(batch_size / 0.8 / 2), random_state=1234),
+                                 dataset_unbalanced[~is_positive_y].sample(int(batch_size / 0.8 / 2), random_state=1234)],
+                                ignore_index=True).sample(int(batch_size / 0.8 / 2) * 2, random_state=1234).reset_index(drop=True)
         else:
             batch_size = 1
             if test_set:
@@ -869,10 +871,10 @@ def test():
     data_tensor, label_tensor = data_generator.make_data_tensor(base_d)
     data_tensor = data_tensor.reshape([-1, 1, args.num_timesteps])
     label_tensor = label_tensor.reshape([-1, 1, args.num_classes])
-    feed_dict = {support_x: data_tensor[:int(len(data_tensor) * 0.6)],
-                 support_y: label_tensor[:int(len(label_tensor) * 0.6)],
-                 query_x: data_tensor[int(len(data_tensor) * 0.6):],
-                 query_y: label_tensor[int(len(label_tensor) * 0.6):]}
+    feed_dict = {support_x: data_tensor[:int(len(data_tensor) * 0.8)],
+                 support_y: label_tensor[:int(len(label_tensor) * 0.8)],
+                 query_x: data_tensor[int(len(data_tensor) * 0.8):],
+                 query_y: label_tensor[int(len(label_tensor) * 0.8):]}
     itr = 0
     for itr in range(resume_itr, args.pretrain_iterations + args.metatrain_iterations):
         ops = [metatrain_op]
@@ -899,10 +901,10 @@ def test():
 
         if (itr != 0) and itr % TEST_PRINT_INTERVAL == 0:
             data_tensor, label_tensor = data_generator.make_data_tensor(base_d, train=False)
-            feed_dict = {support_x: data_tensor[:int(len(data_tensor) * 0.6)],
-                         support_y: label_tensor[:int(len(label_tensor) * 0.6)],
-                         query_x: data_tensor[int(len(data_tensor) * 0.6):],
-                         query_y: label_tensor[int(len(label_tensor) * 0.6):]}
+            feed_dict = {support_x: data_tensor[:int(len(data_tensor) * 0.8)],
+                         support_y: label_tensor[:int(len(label_tensor) * 0.8)],
+                         query_x: data_tensor[int(len(data_tensor) * 0.8):],
+                         query_y: label_tensor[int(len(label_tensor) * 0.8):]}
 
             if classification:
                 ops = [total_acc1, total_accs2[args.num_updates - 1]]
