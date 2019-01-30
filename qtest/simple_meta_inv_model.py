@@ -23,11 +23,10 @@ class Argument:
         #             'CSI300', 'HSCE', 'TOPIX100', 'MSCIUSREITTR', 'USDKRW', 'GSCIGOLD', 'KISCOMPBONDCALL']
         self.idx_list = ['MSCIWORLD', 'KISCOMPBONDCALL']
 
-
         self.num_timesteps = 12
         self.stop_grad = True
         self.meta_batch_size = 25
-        self.update_batch_size = 5
+        self.update_batch_size = 1      # K for K-shot learning
         self.train = True
         # self.test_set = False
         self.train_update_batch_size = -1
@@ -51,22 +50,23 @@ args = Argument()
 
 
 class DataGenerator(object):
-    def __init__(self, batch_size, config={}):
-        self.batch_size = batch_size
+    def __init__(self, config={}):
         # self.num_samples_per_class = num_samples_per_class
-        self.num_classes = 1
+        self.num_classes = 2
         self.rebal_counter = 0
         self.universe = list()
 
         if args.datasource == 'momentum':
             self.idx_list = config.get('idx_list', args.idx_list)
             self.dim_input = config.get('num_timesteps', args.num_timesteps)
-            self.dim_output = 1
+            self.dim_output = 2
 
         self._get_data_from_db()
 
     def make_data_tensor(self, base_d, train=True, test_set=False, normalize=True):
+
         if train:
+            batch_size = args.meta_batch_size
             start_d = self.dates[max(self.dates.index(base_d) - 120, 0)]
             end_d = self.dates[self.dates.index(base_d) - 36]
             where_data = (self.data_df.date_0 >= start_d) & (self.data_df.date_0 <= end_d)
@@ -77,9 +77,17 @@ class DataGenerator(object):
                     if (idx.lower() != 'kiscompbondcall') and len(self.data_df[(self.data_df.idx_cd == idx) & where_data]) >= 24:
                         self.universe.append(idx)
                 self.rebal_counter = self.rebal_counter + 1
+                print("date: {} , universe:{}".format(base_d, self.universe))
+            # dataset = self.data_df[self.data_df.idx_cd.isin(self.universe) & where_data].sample(batch_size, random_state=1234)
+            dataset_unbalanced = self.data_df[self.data_df.idx_cd.isin(self.universe) & where_data]
 
-            dataset = self.data_df[self.data_df.idx_cd.isin(self.universe) & where_data].sample(self.batch_size, random_state=1234)
+            # positive / negative data balancing
+            is_positive_y = (dataset_unbalanced.t1 - dataset_unbalanced.t0 >= 0)
+            dataset = pd.concat([dataset_unbalanced[is_positive_y].sample(int(batch_size / 2), random_state=1234),
+                                 dataset_unbalanced[~is_positive_y].sample(int(batch_size / 2), random_state=1234)],
+                                ignore_index=True).sample(int(batch_size / 2) * 2, random_state=1234).reset_index(drop=True)
         else:
+            batch_size = 1
             if test_set:
                 start_d = self.dates[self.dates.index(base_d) - 11]
                 end_d = base_d
@@ -93,12 +101,14 @@ class DataGenerator(object):
         # 첫번째 또는 12월말 기준 모델 재학습
 
         data_tensor = np.array(dataset[self.columns_data[:-1]])
-        label_tensor = np.array(dataset[self.columns_data[-1]] - dataset[self.columns_data[-2]])
-
+        label_tensor = np.array(dataset[self.columns_data[-1]] - dataset[self.columns_data[-2]]).reshape([-1, 1])
+        label_tensor = np.concatenate((np.array(label_tensor >= 0) * 1.0, np.array(label_tensor < 0) * 1.0), axis=1)
         if normalize:
             data_tensor = (data_tensor - np.mean(data_tensor, axis=1, keepdims=True)) \
                           / np.std(data_tensor, axis=1, ddof=1, keepdims=True)
 
+        data_tensor = data_tensor.reshape([-1, 1, args.num_timesteps])  # task_metalearn을 위한 map_fn 문제 해결 위해 1-D 추가
+        label_tensor = label_tensor.reshape([-1, 1, args.num_classes])
         return data_tensor, label_tensor
 
     def _get_data_from_db(self):
@@ -141,14 +151,14 @@ def normalize(inputs, activation, reuse, scope):
 
 
 def xent(pred, label):
-    pred = tf.reshape(pred, [-1])
-    label = tf.reshape(label, [-1])
+    # pred = tf.reshape(pred, [-1, 1])
+    # label = tf.reshape(label, [-1, 1])
     return tf.nn.softmax_cross_entropy_with_logits_v2(logits=pred, labels=label) / args.update_batch_size
 
 
 def mse(pred, label):
-    pred = tf.reshape(pred, [-1])
-    label = tf.reshape(label, [-1])
+    pred = tf.reshape(pred, [-1, 1])
+    label = tf.reshape(label, [-1, 1])
     return tf.reduce_mean(tf.square(pred-label))
 
 
@@ -177,11 +187,13 @@ def get_result(df):
     plt.yscale('log')
 
 
+
+
 class MAML:
     def __init__(self, dim_input, dim_output, meta_lr=1e-3, train_lr=1e-2, test_num_updates=5):
         self.dim_input = dim_input
         self.dim_output = dim_output
-        self.meta_lr = tf.placeholder_with_default(meta_lr, ())
+        self.meta_lr = tf.placeholder_with_default(meta_lr, (), name='meta_lr')
         self.train_lr = train_lr
         self.test_num_updates = test_num_updates
 
@@ -195,10 +207,10 @@ class MAML:
             raise ValueError('Unrecognized data source.')
 
     def construct_model(self):
-        self.support_x = tf.placeholder(tf.float32, shape=[None, self.dim_input])
-        self.support_y = tf.placeholder(tf.float32, shape=[None, 1])
-        self.query_x = tf.placeholder(tf.float32, shape=[None, self.dim_input])
-        self.query_y = tf.placeholder(tf.float32, shape=[None, 1])
+        self.support_x = tf.placeholder(tf.float32, shape=[None, 1, self.dim_input], name='support_x')
+        self.support_y = tf.placeholder(tf.float32, shape=[None, 1, self.dim_output], name='support_y')
+        self.query_x = tf.placeholder(tf.float32, shape=[None, 1, self.dim_input], name='query_x')
+        self.query_y = tf.placeholder(tf.float32, shape=[None, 1, self.dim_output], name='query_y')
 
         with tf.variable_scope('model', reuse=None) as training_scope:
             if 'weights' in dir(self):
@@ -319,10 +331,11 @@ class MAML:
         for i in range(1, len(self.dim_hidden)):
             hidden = normalize(tf.matmul(hidden, weights['w' + str(i+1)]) + weights['b' + str(i+1)],
                                activation=tf.nn.relu, reuse=reuse, scope=str(i+1))
-        return tf.matmul(hidden, weights['w' + str(len(self.dim_hidden) + 1)]) + weights['b' + str(len(self.dim_hidden) + 1)]
+        out = tf.matmul(hidden, weights['w' + str(len(self.dim_hidden) + 1)]) + weights['b' + str(len(self.dim_hidden) + 1)]
+        return out
 
 
-def train(model, saver, sess, base_d, exp_string, data_generator, resume_itr=0):
+def fn_train(model, saver, sess, base_d, exp_string, data_generator, resume_itr=0):
     SUMMARY_INTERVAL = 100
     SAVE_INTERVAL = 1000
     if args.datasource == 'momentum':
@@ -340,18 +353,21 @@ def train(model, saver, sess, base_d, exp_string, data_generator, resume_itr=0):
     num_classes = data_generator.num_classes
     multitask_weights, reg_weights = [], []
 
+    data_tensor, label_tensor = data_generator.make_data_tensor(base_d)
+    feed_dict = {model.support_x: data_tensor[:int(len(data_tensor) * 0.6)],
+                 model.support_y: label_tensor[:int(len(label_tensor) * 0.6)],
+                 model.query_x: data_tensor[int(len(data_tensor) * 0.6):],
+                 model.query_y: label_tensor[int(len(label_tensor) * 0.6):]}
+
     for itr in range(resume_itr, args.pretrain_iterations + args.metatrain_iterations):
-        data_tensor, label_tensor = data_generator.make_data_tensor(base_d)
-        feed_dict = {model.support_x: data_tensor[:int(len(data_tensor) * 0.6)],
-                     model.support_y: label_tensor[:int(len(label_tensor) * 0.6)],
-                     model.query_x: data_tensor[int(len(data_tensor) * 0.6):],
-                     model.query_y: label_tensor[int(len(label_tensor) * 0.6):]}
+        # print(itr)
         if itr < args.pretrain_iterations:
             ops = [model.pretrain_op]
         else:
             ops = [model.metatrain_op]
 
         if (itr % SUMMARY_INTERVAL == 0 or itr % PRINT_INTERVAL == 0):
+            # print("{} : 1".format(itr))
             ops.extend([model.summ_op, model.total_loss1, model.total_losses2[args.num_updates - 1]])
             if model.classification:
                 ops.extend([model.total_acc1, model.total_accs2[args.num_updates - 1]])
@@ -359,12 +375,14 @@ def train(model, saver, sess, base_d, exp_string, data_generator, resume_itr=0):
         result = sess.run(ops, feed_dict=feed_dict)
 
         if itr % SUMMARY_INTERVAL == 0:
+            # print("{} : 2".format(itr))
             prelosses.append(result[-2])
             if args.log:
                 train_writer.add_summary(result[1], itr)
             postlosses.append(result[-1])
 
         if (itr != 0) and itr % PRINT_INTERVAL == 0:
+            # print("{} : 3".format(itr))
             if itr < args.pretrain_iterations:
                 print_str = 'Pretrain Iteration ' + str(itr)
             else:
@@ -374,19 +392,21 @@ def train(model, saver, sess, base_d, exp_string, data_generator, resume_itr=0):
             prelosses, postlosses = [], []
 
         if (itr != 0) and itr % SAVE_INTERVAL == 0:
+            # print("{} : 4".format(itr))
             saver.save(sess, args.logdir + '/' + exp_string + '/model' + str(itr))
 
         if (itr != 0) and itr % TEST_PRINT_INTERVAL == 0:
-            if model.classification:
-                ops = [model.metaval_total_acc1, model.metaval_total_accs2[args.num_updates - 1], model.summ_op]
-            else:
-                ops = [model.metaval_total_loss1, model.metaval_total_losses2[args.num_updates - 1], model.summ_op]
-
+            # print("{} : 5".format(itr))
             data_tensor, label_tensor = data_generator.make_data_tensor(base_d, train=False)
             feed_dict = {model.support_x: data_tensor[:int(len(data_tensor) * 0.6)],
                          model.support_y: label_tensor[:int(len(label_tensor) * 0.6)],
                          model.query_x: data_tensor[int(len(data_tensor) * 0.6):],
                          model.query_y: label_tensor[int(len(label_tensor) * 0.6):]}
+
+            if model.classification:
+                ops = [model.total_acc1, model.total_accs2[args.num_updates - 1], model.summ_op]
+            else:
+                ops = [model.total_loss1, model.total_losses2[args.num_updates - 1], model.summ_op]
 
             result = sess.run(ops, feed_dict=feed_dict)
             print('Validation result: ' + str(result[0]) + ', ' + str(result[1]))
@@ -395,7 +415,7 @@ def train(model, saver, sess, base_d, exp_string, data_generator, resume_itr=0):
 
 NUM_TEST_POINTS = 600
 
-def test(model, saver, sess, base_d, exp_string, data_generator, test_num_updates=None):
+def fn_test(model, saver, sess, base_d, exp_string, data_generator, test_num_updates=None):
     num_classes = data_generator.num_classes
 
     np.random.seed(1234)
@@ -412,7 +432,7 @@ def test(model, saver, sess, base_d, exp_string, data_generator, test_num_update
                      model.meta_lr: 0.0}
 
         if model.classification:
-            result = sess.run([model.metaval_total_acc1] + model.metaval_total_accs2, feed_dict)
+            result = sess.run([model.total_acc1] + model.total_accs2, feed_dict)
         else:
             result = sess.run([model.total_loss1] + model.total_losses2, feed_dict)
         metaval_accs.append(result)
@@ -570,7 +590,7 @@ def get_exp_string():
 is_train=True
 def main(is_train=True):
     # data processing
-    data_generator = DataGenerator(args.meta_batch_size)
+    data_generator = DataGenerator()
 
     if args.datasource == 'momentum':
         tf_data_load = True
@@ -589,7 +609,7 @@ def main(is_train=True):
 
     dim_input = data_generator.dim_input
     dim_output = data_generator.dim_output
-    model = MAML(dim_input, dim_output, test_num_updates=args.meta_batch_size)
+    model = MAML(dim_input, dim_output, test_num_updates=args.num_updates)
     model.construct_model()
 
     model.summ_op = tf.summary.merge_all()
@@ -626,19 +646,11 @@ def main(is_train=True):
     for t in range(120, num_dates - 1):
         base_d = data_generator.dates[t]
 
-        data_tensor, label_tensor = data_generator.make_data_tensor(base_d)
-        input_tensors = {'support_x': data_tensor[:int(len(data_tensor) * 0.6)],
-                         'query_x': data_tensor[int(len(data_tensor) * 0.6):],
-                         'support_y': label_tensor[:int(len(label_tensor) * 0.6)],
-                         'query_y': label_tensor[int(len(label_tensor) * 0.6):]}
-
-        test_data_tensor, test_label_tensor = data_generator.make_data_tensor(base_d, train=False)
-
         train = True
-        train(model, saver, sess, base_d, exp_string, data_generator, resume_itr)
+        fn_train(model, saver, sess, base_d, exp_string, data_generator, resume_itr)
 
         train = False
-        test(model, saver, sess, exp_string, data_generator, test_num_updates)
+        fn_test(model, saver, sess, base_d, exp_string, data_generator, test_num_updates=5)
         if train is False:
             args.meta_batch_size = orig_meta_batch_size
 
@@ -707,4 +719,196 @@ def main(is_train=True):
 
 
 
+
+# # # # # # # # # # # # # # # # # # # # # #  TEST  # # # # # # # # # # # # # # # #
+def test():
+    meta_lr=1e-3; train_lr=1e-2; test_num_updates=5
+    meta_lr = tf.placeholder_with_default(meta_lr, (), name='meta_lr')
+    loss_func = xent
+    classification = True
+    dim_hidden = [64, 32, 16]
+
+    data_generator = DataGenerator()
+    dim_input = data_generator.dim_input
+    dim_output = data_generator.dim_output
+    def construct_fc_weights():
+        weights = {}
+        weights['w1'] = tf.Variable(tf.truncated_normal([dim_input, dim_hidden[0]], stddev=0.01))
+        weights['b1'] = tf.Variable(tf.zeros([dim_hidden[0]]))
+        for i in range(1, len(dim_hidden)):
+            weights['w' + str(i + 1)] = tf.Variable(
+                tf.truncated_normal([dim_hidden[i - 1], dim_hidden[i]], stddev=0.01))
+            weights['b' + str(i + 1)] = tf.Variable(tf.zeros([dim_hidden[i]]))
+        weights['w' + str(len(dim_hidden) + 1)] = tf.Variable(
+            tf.truncated_normal([dim_hidden[-1], dim_output], stddev=0.01))
+        weights['b' + str(len(dim_hidden) + 1)] = tf.Variable(tf.zeros([dim_output]))
+        return weights
+
+
+    def forward_fc(input_data, weights, reuse=False):
+        input_data = tf.reshape(input_data, [-1, dim_input])
+        hidden = normalize(tf.matmul(input_data, weights['w1']) + weights['b1'], activation=tf.nn.relu, reuse=reuse,
+                           scope='0')
+        for i in range(1, len(dim_hidden)):
+            hidden = normalize(tf.matmul(hidden, weights['w' + str(i + 1)]) + weights['b' + str(i + 1)],
+                               activation=tf.nn.relu, reuse=reuse, scope=str(i + 1))
+        return tf.matmul(hidden, weights['w' + str(len(dim_hidden) + 1)]) + weights[
+            'b' + str(len(dim_hidden) + 1)]
+
+    forward = forward_fc
+    construct_weights = construct_fc_weights
+
+    # map_fn에서 row 하나씩 slice되어 들어가므로 1-D 데이터의 경우 [1]에서 1로 바껴서 acc계산시 오류발생. shape에 1 추가함으로 일단 해결
+    support_x = tf.placeholder(tf.float32, shape=[None, 1, dim_input], name='support_x')
+    support_y = tf.placeholder(tf.float32, shape=[None, 1, dim_output], name='support_y')
+    query_x = tf.placeholder(tf.float32, shape=[None, 1, dim_input], name='query_x')
+    query_y = tf.placeholder(tf.float32, shape=[None, 1, dim_output], name='query_y')
+    weights = construct_weights()
+    num_updates = 5
+
+
+    def task_metalearn(input_data, reuse=True):
+        support_x, support_y, query_x, query_y = input_data
+        task_query_preds, task_query_losses = [], []
+
+        if classification:
+            task_query_accs = []
+
+        task_support_pred = forward(support_x, weights, reuse=reuse)
+        task_support_loss = loss_func(task_support_pred, support_y)
+
+        grads = tf.gradients(task_support_loss, list(weights.values()))
+        if args.stop_grad:
+            grads = [tf.stop_gradient(grad) for grad in grads]
+
+        gradients = dict(zip(weights.keys(), grads))
+        fast_weights = dict(zip(weights.keys(),
+                                [weights[key] - train_lr * gradients[key] for key in weights.keys()]))
+
+        query_pred = forward(query_x, fast_weights, reuse=True)
+        task_query_preds.append(query_pred)
+        task_query_losses.append(loss_func(query_pred, query_y))
+
+        for j in range(num_updates - 1):
+            loss = loss_func(forward(support_x, fast_weights, reuse=True), support_y)
+            grads = tf.gradients(loss, list(fast_weights.values()))
+            if args.stop_grad:
+                grads = [tf.stop_gradient(grad) for grad in grads]
+            gradients = dict(zip(fast_weights.keys(), grads))
+            fast_weights = dict(zip(fast_weights.keys(),
+                                    [fast_weights[key] - train_lr * gradients[key] for key in fast_weights.keys()]))
+
+            query_pred = forward(query_x, fast_weights, reuse=True)
+            task_query_preds.append(query_pred)
+            task_query_losses.append(loss_func(query_pred, query_y))
+
+        task_output = [task_support_pred, task_query_preds, task_support_loss, task_query_losses]
+
+        if classification:
+            task_support_acc = tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_support_pred), 1),
+                                                                      tf.argmax(support_y, 1))
+
+            for j in range(num_updates):
+                task_query_accs.append(tf.contrib.metrics.accuracy(
+                    tf.argmax(tf.nn.softmax(task_query_preds[j]), 1), tf.argmax(query_y, 1)))
+            task_output.extend([task_support_acc, task_query_accs])
+
+        return task_output
+
+    out_dtype = [tf.float32, [tf.float32] * num_updates, tf.float32, [tf.float32] * num_updates]
+
+    if classification:
+        out_dtype.extend([tf.float32, [tf.float32] * num_updates])
+
+    result = tf.map_fn(task_metalearn, elems=(support_x, support_y, query_x, query_y),
+                       dtype=out_dtype,
+                       parallel_iterations=args.meta_batch_size)
+
+    if classification:
+        support_preds, query_preds, support_losses, query_losses, support_accs, query_accs = result
+    else:
+        support_preds, query_preds, support_losses, query_losses = result
+
+    total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
+    total_losses2 = [tf.reduce_mean(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+
+    if classification:
+        total_acc1 = tf.reduce_sum(support_accs) / tf.to_float(args.meta_batch_size)
+        total_accs2 = [tf.reduce_sum(query_accs[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+    pretrain_op = tf.train.AdamOptimizer(meta_lr).minimize(total_loss1)
+
+    if args.metatrain_iterations > 0:
+        optimizer = tf.train.AdamOptimizer(meta_lr)
+        gvs = optimizer.compute_gradients(total_losses2[args.num_updates - 1])
+        metatrain_op = optimizer.apply_gradients(gvs)
+
+
+
+    sess = tf.InteractiveSession()
+    tf.local_variables_initializer().run()
+    tf.global_variables_initializer().run()
+
+    t = 120
+    base_d = data_generator.dates[t]
+
+    SUMMARY_INTERVAL = 100
+    SAVE_INTERVAL = 1000
+    if args.datasource == 'momentum':
+        PRINT_INTERVAL = 1000
+        TEST_PRINT_INTERVAL = PRINT_INTERVAL * 5
+    else:
+        PRINT_INTERVAL = 100
+        TEST_PRINT_INTERVAL = PRINT_INTERVAL * 5
+
+    prelosses, postlosses = [], []
+
+    num_classes = data_generator.num_classes
+    multitask_weights, reg_weights = [], []
+    resume_itr = 0
+
+    data_tensor, label_tensor = data_generator.make_data_tensor(base_d)
+    data_tensor = data_tensor.reshape([-1, 1, args.num_timesteps])
+    label_tensor = label_tensor.reshape([-1, 1, args.num_classes])
+    feed_dict = {support_x: data_tensor[:int(len(data_tensor) * 0.6)],
+                 support_y: label_tensor[:int(len(label_tensor) * 0.6)],
+                 query_x: data_tensor[int(len(data_tensor) * 0.6):],
+                 query_y: label_tensor[int(len(label_tensor) * 0.6):]}
+    itr = 0
+    for itr in range(resume_itr, args.pretrain_iterations + args.metatrain_iterations):
+        ops = [metatrain_op]
+
+        if (itr % SUMMARY_INTERVAL == 0 or itr % PRINT_INTERVAL == 0):
+            ops.extend([total_loss1, total_losses2[args.num_updates - 1]])
+            if classification:
+                ops.extend([total_acc1, total_accs2[args.num_updates - 1]])
+
+        result = sess.run(ops, feed_dict=feed_dict)
+
+        if itr % SUMMARY_INTERVAL == 0:
+            prelosses.append(result[-2])
+            postlosses.append(result[-1])
+
+        if (itr != 0) and itr % PRINT_INTERVAL == 0:
+            if itr < args.pretrain_iterations:
+                print_str = 'Pretrain Iteration ' + str(itr)
+            else:
+                print_str = 'Iteration ' + str(itr - args.pretrain_iterations)
+            print_str += ": " + str(np.mean(prelosses)) + ', ' + str(np.mean(postlosses))
+            print(print_str)
+            prelosses, postlosses = [], []
+
+        if (itr != 0) and itr % TEST_PRINT_INTERVAL == 0:
+            data_tensor, label_tensor = data_generator.make_data_tensor(base_d, train=False)
+            feed_dict = {support_x: data_tensor[:int(len(data_tensor) * 0.6)],
+                         support_y: label_tensor[:int(len(label_tensor) * 0.6)],
+                         query_x: data_tensor[int(len(data_tensor) * 0.6):],
+                         query_y: label_tensor[int(len(label_tensor) * 0.6):]}
+
+            if classification:
+                ops = [total_acc1, total_accs2[args.num_updates - 1]]
+            else:
+                ops = [total_loss1, total_losses2[args.num_updates - 1]]
+
+            result = sess.run(ops, feed_dict=feed_dict)
+            print('Validation result: ' + str(result[0]) + ', ' + str(result[1]))
 
