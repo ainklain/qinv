@@ -138,7 +138,7 @@ def read_stock_history():
     sqlm = SqlManager()
     df = sqlm.db_read(sql_)
 
-    item_list = ['open_','high_','low_', 'close_', 'volume_']
+    item_list = ['open_', 'high_', 'low_', 'close_', 'volume_']
     infocode = list(df.infocode.unique())
 
     df_to_arr = np.zeros([len(df.infocode.unique()), len(df.marketdate.unique()), len(item_list)])
