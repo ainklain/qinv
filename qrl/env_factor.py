@@ -198,10 +198,10 @@ class PortfolioEnv(gym.Env):
 
         y1 = obs[-1, :]
         reward, info, done2 = self.sim._step(weights, y1)
-        reward = reward - np.sum(weights == 0) * 0.01
+        # reward = reward - np.sum(weights == 0) * 0.01
         self.infos.append(info)
 
-        # obs = np.expand_dims(obs, -1)
+        obs = np.expand_dims(obs, -1)
         # print('reward:{} , info:{}'.format(reward, info))
         return obs, reward, done1 or done2, info
 
@@ -212,7 +212,7 @@ class PortfolioEnv(gym.Env):
         self.infos = []
         self.sim.reset()
         obs, ground_truth_obs = self.src.reset()
-        # obs = np.expand_dims(obs, -1)
+        obs = np.expand_dims(obs, -1)
 
         self.render_call = 0
 
