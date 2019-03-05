@@ -51,6 +51,11 @@ class SqlManager:
         self.db_close()
         return results
 
+    def db_read_pandas(self, sql, chunksize):
+        self.db_connect()
+        chunks =pd.read_sql_query(sql, self.conn, chunksize=chunksize)
+
+
     def db_insert(self, df, table_name, fast_executemany=False):
         self.db_connect()
         cursor = self.conn.cursor()

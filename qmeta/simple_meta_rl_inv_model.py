@@ -22,9 +22,9 @@ parser.add_argument('--datasource', default='momentum')
 class Argument:
     def __init__(self):
         self.datasource = 'momentum'
-        # self.idx_list = ['MSCIWORLD', 'MSCIEM', 'KOSPI200', 'KOSDAQ150', 'SPX500', 'NASDAQ100', 'RUSSELL2000',
-        #             'CSI300', 'HSCE', 'TOPIX100', 'MSCIUSREITTR', 'USDKRW', 'GSCIGOLD', 'KISCOMPBONDCALL']
-        self.idx_list = ['MSCIWORLD', 'KISCOMPBONDCALL']
+        self.idx_list = ['MSCIWORLD', 'MSCIEM', 'KOSPI200', 'KOSDAQ150', 'SPX500', 'NASDAQ100', 'RUSSELL2000',
+                    'CSI300', 'HSCE', 'TOPIX100', 'MSCIUSREITTR', 'USDKRW', 'GSCIGOLD', 'KISCOMPBONDCALL']
+        # self.idx_list = ['MSCIWORLD', 'KISCOMPBONDCALL']
 
         self.num_timesteps = 12
         self.stop_grad = True
@@ -50,6 +50,93 @@ class Argument:
 
 args = Argument()
 
+
+def factor_ls_txt():
+    file_nm = 'factor_data.txt'
+    df = pd.read_csv(file_nm, index_col=0, sep='\t')
+
+    df.columns = [i.lower() for i in df.columns]
+    df.set_index('eval_d', inplace=True)
+    df = df[df.isna().sum(axis=1) == 0]
+    etf_id = list(df.columns)
+    marketdate = list(df.index.unique())
+    history = df.values
+
+
+def factor_history():
+    from qdata.dbmanager import SqlManager
+    sql_ = """    	
+		select eval_d, mkt_rf, smb, hml, rmw, wml, call_rate, kospi, mom, beme, gpa, usdkrw
+			from (
+				select return_date, mkt_rf, smb, hml, rmw, wml, call_rate, mkt
+					from passive..factor_timeseries_wise
+					where return_date >= '2005-02-02'
+			) a
+			join (
+				select * 
+					from  (
+					select idxcd, d.eval_d, round(clsprc / lag(clsprc, 1) over (partition by idxcd order by base_d) - 1, 8) as value_
+						from (
+							select eval_d
+							from qinv..DateTableGlobal
+							where region = 'KR'
+							and eval_d = work_d
+							and eval_d >= '2005-02-01'
+						) D
+						join wms..indexdata a
+						on d.eval_d = convert(date, a.base_d)
+						where idxcd in ('KOSPI','MOM','BEME','GPA','USDKRW','KISCOMPBONDCALL')
+						and base_d >= '20050201'
+					) A
+					pivot (
+						min(value_)
+						for idxcd in ([KOSPI],[MOM],[BEME],[GPA],[USDKRW],[KISCOMPBONDCALL])
+					) B
+			) b
+			on a.return_date = b.eval_d
+			order by a.return_date, b.eval_d
+    """
+    sqlm = SqlManager()
+    df = sqlm.db_read(sql_)
+    df.columns = [i.lower() for i in df.columns]
+    df.set_index('eval_d', inplace=True)
+    df = df[df.isna().sum(axis=1) == 0]
+    factor_id = list(df.columns)
+    marketdate = list(df.index.unique())
+
+    history = df.values
+
+    # history = df_to_arr[~np.isnan(np.sum(df_to_arr, axis=1)), :]
+
+    return df, history, factor_id, marketdate
+
+
+def factor_etf_csv():
+    file_nm = 'factor_etf.csv'
+    df = pd.read_csv(file_nm, index_col=0)
+
+    df.columns = [i.lower() for i in df.columns]
+    df.set_index('eval_d', inplace=True)
+    df = df[df.isna().sum(axis=1) == 0]
+    etf_id = list(df.columns)
+    marketdate = list(df.index.unique())
+    history = df.values
+
+    return history, etf_id, marketdate
+
+
+def factor_history_csv():
+    file_nm = 'data_for_metarl.csv'
+    df = pd.read_csv(file_nm, index_col=0)
+
+    df.columns = [i.lower() for i in df.columns]
+    df.set_index('eval_d', inplace=True)
+    df = df[df.isna().sum(axis=1) == 0]
+    etf_id = list(df.columns)
+    marketdate = list(df.index.unique())
+    history = df.values
+
+    return df, history, etf_id, marketdate
 
 class DataGenerator(object):
     def __init__(self, config={}):
