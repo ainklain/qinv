@@ -110,7 +110,7 @@ class Memory(object):
         experience = (s, a, r, s_, done)
         if self.memory_counter < self.memory_size:
             self.memory.append(experience)
-            self.memory_counter  += 1
+            self.memory_counter += 1
         else:
             self.memory.popleft()
             self.memory.append(experience)

@@ -13,6 +13,8 @@ import random
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
+import gym
+
 from tensorflow.contrib.layers.python import layers as tf_layers
 
 parser = argparse.ArgumentParser()
@@ -130,13 +132,150 @@ def factor_history_csv():
     df = pd.read_csv(file_nm, index_col=0)
 
     df.columns = [i.lower() for i in df.columns]
-    df.set_index('eval_d', inplace=True)
     df = df[df.isna().sum(axis=1) == 0]
-    etf_id = list(df.columns)
-    marketdate = list(df.index.unique())
-    history = df.values
+    # columns = list(df.columns)
+    # marketdate = list(df.index.unique())
+    # history = df.values
 
-    return df, history, etf_id, marketdate
+    return df # , history, columns, marketdate
+
+
+df = factor_history_csv()
+asset_df = df[['mom', 'beme', 'gpa', 'kospi']]
+macro_df = df[['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'usdkrw']]
+
+
+class PortfolioSim(object):
+    def __init__(self, asset_list, macro_list=None, steps=250, trading_cost=1e-3):
+        self.trading_cost = trading_cost
+        self.steps = steps
+        self.step = 0
+
+        self.asset_returns_df = pd.DataFrame(columns=asset_list)
+        if macro_list is not None:
+            self.macro_returns_df = pd.DataFrame(columns=macro_list)
+
+        self.actions = np.zeros([self.steps, len(asset_list)])
+        self.navs = np.ones(self.steps)
+        self.asset_nav = np.ones([self.steps, len(asset_list)])
+        self.positions = np.zeros([self.steps, len(asset_list)])
+        self.costs = np.zeros(self.steps)
+        self.trades = np.zeros([self.steps, len(asset_list)])
+        self.rewards_history = np.ones(self.steps)
+
+
+
+    def _step(self, actions, asset_returns, macro_returns=None):
+        eps = 1e-8
+
+        if self.step == 0:
+            last_pos = np.zeros(len(actions))
+            last_nav = 1.
+            last_asset_nav = np.ones(len(actions))
+        else:
+            last_pos = self.positions[self.step - 1, :]
+            last_nav = self.navs[self.step - 1]
+            last_asset_nav = self.asset_nav[self.step - 1, :]
+
+        self.asset_returns_df.loc[self.step] = asset_returns
+        if macro_returns is not None:
+            self.macro_returns_df.loc[self.step] = macro_returns
+
+        self.actions[self.step, :] = actions
+
+        self.positions[self.step, :] = ((asset_returns + 1.) * actions) / (np.dot((asset_returns + 1.), actions) + eps)
+        self.trades[self.step, :] = actions - last_pos
+
+        trade_costs_pct = np.sum(abs(self.trades[self.step, :])) * self.trading_cost
+        self.costs[self.step] = trade_costs_pct
+        reward = (np.dot((asset_returns + 1.), actions) - 1.) - self.costs[self.step]
+        self.rewards_history[self.step] = reward
+
+        if self.step != 0:
+            self.navs[self.step] = last_nav * (1. + reward)
+            self.stk_nav[self.step, :] = last_asset_nav * (1. + asset_returns)
+
+        done = (self.navs[self.step] == 0) | (self.navs[self.step] < np.max(self.navs) * 0.9)
+        if self.step % 60 == 0:
+            if self.navs[self.step] < np.max(self.navs) * 0.9:
+                done = True
+
+
+
+    def _reset(self):
+        self.step = 0
+        self.actions.fill(0)
+        self.navs.fill(1)
+        self.positions.fill(0)
+        self.costs.fill(0)
+
+    def export(self):
+        exported_data = dict()
+        exported_data['last_step'] = self.step
+        exported_data['asset_returns_df'] = self.asset_returns_df
+        exported_data['macro_returns_df'] = self.macro_returns_df
+        exported_data['navs'] = self.navs
+        exported_data['positions'] = self.positions
+        exported_data['costs'] = self.costs
+        exported_data['actions'] = self.actions
+
+        return exported_data
+
+
+
+class PortfolioEnv(gym.Env):
+    metadata = {'render.modes': ['human']}
+
+    def __init__(self, asset_df, macro_df, trading_cost=0.0020, window_length=250):
+        super().__init__()
+        self.window_length = window_length
+        self.trading_cost = trading_cost
+
+        self._setup(asset_df, macro_df)
+
+    def _setup(self, asset_df, macro_df):
+        self.asset_list = list(asset_df.columns)
+        self.macro_list = list(macro_df.columns)
+
+        self.sim = PortfolioSim(trading_cost=self.trading_cost)
+
+        self.action_space = gym.spaces.Box(0, 1, shape=(len(self.asset_list), ), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-np.inf,
+                                                high=np.inf,
+                                                shape=(self.window_length, len(self.asset_list) + len(self.macro_list)),
+                                                dtype=np.float32)
+
+
+        columns = list(df.columns)
+        marketdate = list(df.index.unique())
+        history = df.values
+
+
+    def step(self, actions):
+        return self._step(actions)
+
+    def _step(self, actions, eps=1e-8):
+        np.testing.assert_almost_equal(actions.shape, (self.num_assets,))
+
+
+
+
+    def reset(self):
+        return self._reset()
+
+    def _reset(self):
+        pass
+
+    def render(self, mode='human', close=False):
+        return self._render(mode=mode,  close=close)
+
+    def _render(self, mode='human', close=False):
+        pass
+
+
+
+
+
 
 class DataGenerator(object):
     def __init__(self, config={}):
