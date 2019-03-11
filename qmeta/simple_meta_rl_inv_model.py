@@ -140,10 +140,6 @@ def factor_history_csv():
     return df # , history, columns, marketdate
 
 
-df = factor_history_csv()
-asset_df = df[['mom', 'beme', 'gpa', 'kospi']]
-macro_df = df[['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'usdkrw']]
-
 
 class PortfolioSim(object):
     def __init__(self, asset_list, macro_list=None, steps=250, trading_cost=1e-3):
@@ -151,21 +147,34 @@ class PortfolioSim(object):
         self.steps = steps
         self.step = 0
 
-        self.asset_returns_df = pd.DataFrame(columns=asset_list)
+        self.assets_return_df = pd.DataFrame(columns=asset_list)
+        self.macros_return_df = None
         if macro_list is not None:
-            self.macro_returns_df = pd.DataFrame(columns=macro_list)
+            self.macros_return_df = pd.DataFrame(columns=macro_list)
 
         self.actions = np.zeros([self.steps, len(asset_list)])
         self.navs = np.ones(self.steps)
-        self.asset_nav = np.ones([self.steps, len(asset_list)])
+        self.assets_nav = np.ones([self.steps, len(asset_list)])
         self.positions = np.zeros([self.steps, len(asset_list)])
         self.costs = np.zeros(self.steps)
         self.trades = np.zeros([self.steps, len(asset_list)])
         self.rewards_history = np.ones(self.steps)
 
+    def _reset(self):
+        self.step = 0
+        self.actions.fill(0)
+        self.navs.fill(1)
+        self.assets_nav.fill(1)
+        self.rewards_history.fill(0)
+        self.positions.fill(0)
+        self.costs.fill(0)
+        self.trades.fill(0)
 
+        self.assets_return_df = self.assets_return_df.iloc[0:0]
+        if self.macros_return_df is not None:
+            self.macros_return_df = self.macros_return_df.iloc[0:0]
 
-    def _step(self, actions, asset_returns, macro_returns=None):
+    def _step(self, actions, assets_return, macros_return=None):
         eps = 1e-8
 
         if self.step == 0:
@@ -175,45 +184,53 @@ class PortfolioSim(object):
         else:
             last_pos = self.positions[self.step - 1, :]
             last_nav = self.navs[self.step - 1]
-            last_asset_nav = self.asset_nav[self.step - 1, :]
+            last_asset_nav = self.assets_nav[self.step - 1, :]
 
-        self.asset_returns_df.loc[self.step] = asset_returns
-        if macro_returns is not None:
-            self.macro_returns_df.loc[self.step] = macro_returns
+        self.assets_return_df.loc[self.step] = assets_return
+        if macros_return is not None:
+            self.macros_return_df.loc[self.step] = macros_return
 
         self.actions[self.step, :] = actions
 
-        self.positions[self.step, :] = ((asset_returns + 1.) * actions) / (np.dot((asset_returns + 1.), actions) + eps)
+        self.positions[self.step, :] = ((assets_return + 1.) * actions) / (np.dot((assets_return + 1.), actions) + eps)
         self.trades[self.step, :] = actions - last_pos
 
         trade_costs_pct = np.sum(abs(self.trades[self.step, :])) * self.trading_cost
         self.costs[self.step] = trade_costs_pct
-        reward = (np.dot((asset_returns + 1.), actions) - 1.) - self.costs[self.step]
-        self.rewards_history[self.step] = reward
+        instant_reward = (np.dot((assets_return + 1.), actions) - 1.) - self.costs[self.step]
 
         if self.step != 0:
-            self.navs[self.step] = last_nav * (1. + reward)
-            self.stk_nav[self.step, :] = last_asset_nav * (1. + asset_returns)
+            self.navs[self.step] = last_nav * (1. + instant_reward)
+            self.stk_nav[self.step, :] = last_asset_nav * (1. + assets_return)
 
-        done = (self.navs[self.step] == 0) | (self.navs[self.step] < np.max(self.navs) * 0.9)
-        if self.step % 60 == 0:
-            if self.navs[self.step] < np.max(self.navs) * 0.9:
-                done = True
+        if (self.navs[self.step] == 0) | (self.navs[self.step] < np.max(self.navs) * 0.9):
+            done = True
+            winning_reward = -1
+        elif self.step == self.steps:
+            done = True
+            if self.navs[self.step - 1] >= (1 + 0.05 * (self.step / 250)):      # 1년 5 % 이상 (목표)
+                winning_reward = 1
+            else:
+                winning_reward = -1
+        else:
+            winning_reward = 0
 
+        total_reward = 0.1 * instant_reward + 0.9 * winning_reward
+        self.rewards_history[self.step] = total_reward
 
+        info = {'instant_reward': instant_reward,
+                'winning_reward': winning_reward,
+                'nav': self.navs[self.step],
+                'costs': self.costs[self.step]}
 
-    def _reset(self):
-        self.step = 0
-        self.actions.fill(0)
-        self.navs.fill(1)
-        self.positions.fill(0)
-        self.costs.fill(0)
+        self.step += 1
+        return total_reward, info, done
 
     def export(self):
         exported_data = dict()
         exported_data['last_step'] = self.step
-        exported_data['asset_returns_df'] = self.asset_returns_df
-        exported_data['macro_returns_df'] = self.macro_returns_df
+        exported_data['asset_returns_df'] = self.assets_return_df
+        exported_data['macro_returns_df'] = self.macros_return_df
         exported_data['navs'] = self.navs
         exported_data['positions'] = self.positions
         exported_data['costs'] = self.costs
@@ -222,22 +239,25 @@ class PortfolioSim(object):
         return exported_data
 
 
-
 class PortfolioEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, asset_df, macro_df, trading_cost=0.0020, window_length=250):
+    def __init__(self, asset_df, macro_df=None, trading_cost=0.0020, window_length=250, is_training=True):
         super().__init__()
         self.window_length = window_length
         self.trading_cost = trading_cost
 
         self._setup(asset_df, macro_df)
 
-    def _setup(self, asset_df, macro_df):
+    def _setup(self, asset_df, macro_df=None):
         self.asset_list = list(asset_df.columns)
-        self.macro_list = list(macro_df.columns)
+        if macro_df is not None:
+            self.macro_list = list(macro_df.columns)
+            assert asset_df.shape[0] == macro_df.shape[0], 'length of asset_df should be same as that of macro_df.'
+        else:
+            self.macro_list = []
 
-        self.sim = PortfolioSim(trading_cost=self.trading_cost)
+        self.sim = PortfolioSim(self.asset_list, self.macro_list, steps=250, trading_cost=self.trading_cost)
 
         self.action_space = gym.spaces.Box(0, 1, shape=(len(self.asset_list), ), dtype=np.float32)
         self.observation_space = gym.spaces.Box(low=-np.inf,
@@ -245,19 +265,37 @@ class PortfolioEnv(gym.Env):
                                                 shape=(self.window_length, len(self.asset_list) + len(self.macro_list)),
                                                 dtype=np.float32)
 
-
-        columns = list(df.columns)
-        marketdate = list(df.index.unique())
-        history = df.values
-
+        self._data = pd.concat([asset_df, macro_df], axis=1)
 
     def step(self, actions):
         return self._step(actions)
 
     def _step(self, actions, eps=1e-8):
-        np.testing.assert_almost_equal(actions.shape, (self.num_assets,))
+        # np.testing.assert_almost_equal(actions.shape, (self.action_space.shape,))
 
 
+        action = np.clip(actions, 0.0, 1)
+        weights = np.zeros_like(action)
+        weights[action > 0] = action[action > 0] / (np.sum(action[action > 0]) + eps)
+        weights[-1] = 1 - np.sum(weights[:-1])
+        # weights[action < 0] = action[action < 0] / (np.sum(action[action < 0]) + eps)
+
+
+        assert (weights >= (-1 - 1e-6) * (weights <= (1 + 1e-6))).all()
+        np.testing.assert_almost_equal(np.sum(weights), 1.0, 3,
+                                       err_msg='\n[err msg] \nsum of weights: {}\naction:{}'.format(np.sum(weights), action))
+        # np.testing.assert_almost_equal(np.sum(weights), 0.0, 3)
+
+        obs, done1, ground_truth_obs = self.src._step()
+
+        y1 = obs[-1, :]
+        reward, info, done2 = self.sim._step(weights, y1)
+        # reward = reward - np.sum(weights == 0) * 0.01
+        self.infos.append(info)
+
+        obs = np.expand_dims(obs, -1)
+        # print('reward:{} , info:{}'.format(reward, info))
+        return obs, reward, done1 or done2, info
 
 
     def reset(self):
@@ -271,6 +309,255 @@ class PortfolioEnv(gym.Env):
 
     def _render(self, mode='human', close=False):
         pass
+
+
+def dateadd(base_d, freq_='D', added_nums=0):
+    # date_dt= datetime.datetime.strptime(base_d, '%Y-%m-%d')
+    from dateutil.relativedelta import relativedelta
+    from dateutil.parser import parse
+    date_dt = parse(base_d)
+
+    if freq_.lower() in ['y', 'year']:
+        # date_dt = date_dt.replace(year=date_dt.year + added_nums)
+        date_dt = date_dt + relativedelta(years=added_nums)
+    elif freq_.lower() in ['m', 'month']:
+        date_dt = date_dt + relativedelta(months=added_nums)
+    elif freq_.lower() in ['w', 'week']:
+        date_dt = date_dt + relativedelta(weeks=added_nums)
+    else:
+        date_dt = date_dt + relativedelta(days=added_nums)
+
+    date_ = date_dt.strftime('%Y-%m-%d')
+    return date_
+
+
+class Episodes(object):
+    def __init__(self, gamma=0.95):
+        self.gamma = gamma
+
+
+
+
+
+class EnvSampler(object):
+    def __init__(self, envs_list, batch_size):
+        self.envs_list = envs_list
+        self.batch_size = batch_size
+
+    def sample(self, policy, params=None, gamma=0.95):
+        pass
+
+
+    def sample_envs(self, base_d, num_envs):
+        date_ = dateadd(base_d, 'm', -1)
+        idx_ = self.envs_list.index(date_)
+        # envs = random.sample(self.envs_list[:idx_], num_envs)
+        envs = np.random.choice(self.envs_list[:idx_], size=num_envs, replace=False)
+        return envs
+
+
+
+class MyPolicy:
+    def __init__(self, dim_input, dim_output, dim_hidden=[]):
+        self.dim_input = dim_input
+        self.dim_output = dim_output
+        self.dim_hidden = dim_hidden
+        self.num_layers = len(dim_hidden) + 1
+
+    def construct_weights(self, scope_nm=None):
+        if scope_nm is not None:
+            with tf.variable_scope(scope_nm):
+                weights = {}
+                weights['w1'] = tf.Variable(tf.truncated_normal([self.dim_input, self.dim_hidden[0]], stddev=0.01))
+                weights['b1'] = tf.Variable(tf.zeros([self.dim_hidden[0]]))
+                for i in range(1, len(self.dim_hidden)):
+                    weights['w' + str(i + 1)] = tf.Variable(
+                        tf.truncated_normal([self.dim_hidden[i - 1], self.dim_hidden[i]], stddev=0.01))
+                    weights['b' + str(i + 1)] = tf.Variable(tf.zeros([self.dim_hidden[i]]))
+                weights['w' + str(len(self.dim_hidden) + 1)] = tf.Variable(
+                    tf.truncated_normal([self.dim_hidden[-1], self.dim_output], stddev=0.01))
+                weights['b' + str(len(self.dim_hidden) + 1)] = tf.Variable(tf.zeros([self.dim_output]))
+        return weights
+
+    def forward(self, input_data, weights, reuse=False):
+        input_data = tf.reshape(input_data, [-1, self.dim_input])
+        hidden = normalize(tf.matmul(input_data, weights['w1']) + weights['b1'], activation=tf.nn.relu, reuse=reuse,
+                           scope='0')
+        for i in range(1, len(self.dim_hidden)):
+            hidden = normalize(tf.matmul(hidden, weights['w' + str(i + 1)]) + weights['b' + str(i + 1)],
+                               activation=tf.nn.relu, reuse=reuse, scope=str(i + 1))
+        out = tf.matmul(hidden, weights['w' + str(len(self.dim_hidden) + 1)]) + weights[
+            'b' + str(len(self.dim_hidden) + 1)]
+        return out
+
+
+
+
+
+
+class MetaLearner(object):
+    def __init__(self, sampler, policy, baseline, gamma=0.95, fast_lr=0.5, tau=1.0):
+        self.sampler = sampler
+        self.policy = policy
+        self.baseline = baseline
+        self.gamma = gamma
+        self.fast_lr = fast_lr
+        self.tau = tau
+
+    def inner_loss(self, episodes, params=None):
+
+        pass
+
+
+    def abc(self):
+        self.policy.forward()
+
+    def construct_model(self):
+        self.support_x = tf.placeholder(tf.float32, shape=[None, 1, self.dim_input], name='support_x')
+        self.support_y = tf.placeholder(tf.float32, shape=[None, 1, self.dim_output], name='support_y')
+        self.query_x = tf.placeholder(tf.float32, shape=[None, 1, self.dim_input], name='query_x')
+        self.query_y = tf.placeholder(tf.float32, shape=[None, 1, self.dim_output], name='query_y')
+
+            num_updates = self.test_num_updates
+
+            def task_metalearn(input_data, reuse=True):
+                support_x, support_y, query_x, query_y = input_data
+                task_query_preds, task_query_losses = [], []
+
+                if self.classification:
+                    task_query_accs = []
+
+                task_support_pred = self.forward(support_x, weights, reuse=reuse)
+                task_support_loss = self.loss_func(task_support_pred, support_y)
+
+                grads = tf.gradients(task_support_loss, list(weights.values()))
+                if args.stop_grad:
+                    grads = [tf.stop_gradient(grad) for grad in grads]
+
+                gradients = dict(zip(weights.keys(), grads))
+                fast_weights = dict(zip(weights.keys(),
+                                        [weights[key] - self.train_lr * gradients[key] for key in weights.keys()]))
+
+                query_pred = self.forward(query_x, fast_weights, reuse=True)
+                task_query_preds.append(query_pred)
+                task_query_losses.append(self.loss_func(query_pred, query_y))
+
+                for j in range(num_updates - 1):
+                    loss = self.loss_func(self.forward(support_x, fast_weights, reuse=True), support_y)
+                    grads = tf.gradients(loss, list(fast_weights.values()))
+                    if args.stop_grad:
+                        grads = [tf.stop_gradient(grad) for grad in grads]
+                    gradients = dict(zip(fast_weights.keys(), grads))
+                    fast_weights = dict(zip(fast_weights.keys(),
+                                            [fast_weights[key] - self.train_lr * gradients[key] for key in
+                                             fast_weights.keys()]))
+
+                    query_pred = self.forward(query_x, fast_weights, reuse=True)
+                    task_query_preds.append(query_pred)
+                    task_query_losses.append(self.loss_func(query_pred, query_y))
+
+                task_output = [task_support_pred, task_query_preds, task_support_loss, task_query_losses]
+
+                if self.classification:
+                    task_support_acc = tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_support_pred), 1),
+                                                                   tf.argmax(support_y, 1))
+                    for j in range(num_updates):
+                        task_query_accs.append(
+                            tf.contrib.metrics.accuracy(tf.argmax(tf.nn.softmax(task_query_preds[j]), 1),
+                                                        tf.argmax(query_y, 1)))
+                    task_output.extend([task_support_acc, task_query_accs])
+
+                return task_output
+
+            if args.norm is not 'None':
+                unused = task_metalearn((self.support_x[0], self.query_x[0], self.support_y[0], self.query_y[0]),
+                                        False)
+
+            out_dtype = [tf.float32, [tf.float32] * num_updates, tf.float32, [tf.float32] * num_updates]
+            if self.classification:
+                out_dtype.extend([tf.float32, [tf.float32] * num_updates])
+
+            result = tf.map_fn(task_metalearn, elems=(self.support_x, self.support_y, self.query_x, self.query_y),
+                               dtype=out_dtype,
+                               parallel_iterations=args.meta_batch_size)
+            if self.classification:
+                support_preds, query_preds, support_losses, query_losses, support_accs, query_accs = result
+            else:
+                support_preds, query_preds, support_losses, query_losses = result
+
+        # if 'train' in prefix:
+        # self.total_loss1 = total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
+        # self.total_losses2 = total_losses2 = [tf.reduce_mean(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+        self.total_loss1 = total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
+        self.total_losses2 = total_losses2 = [tf.reduce_mean(query_losses[j]) / tf.to_float(args.meta_batch_size)
+                                              for j
+                                              in range(num_updates)]
+        self.support_preds, self.query_preds = support_preds, query_preds
+        if self.classification:
+            self.total_acc1 = total_acc1 = tf.reduce_sum(support_accs) / tf.to_float(args.meta_batch_size)
+            self.total_accs2 = total_accs2 = [tf.reduce_sum(query_accs[j]) / tf.to_float(args.meta_batch_size) for j
+                                              in range(num_updates)]
+        self.pretrain_op = tf.train.AdamOptimizer(self.meta_lr).minimize(total_loss1)
+
+        if args.metatrain_iterations > 0:
+            optimizer = tf.train.AdamOptimizer(self.meta_lr)
+            self.gvs = gvs = optimizer.compute_gradients(self.total_losses2[args.num_updates - 1])
+            self.metatrain_op = optimizer.apply_gradients(gvs)
+        # else:
+        #     self.metaval_total_loss1 = total_loss1 = tf.reduce_sum(support_losses) / tf.to_float(args.meta_batch_size)
+        #     self.metaval_total_losses2 = total_losses2 = [tf.reduce_sum(query_losses[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+        #     if self.classification:
+        #         self.metaval_total_acc1 = total_acc1 = tf.reduce_sum(support_accs) / tf.to_float(args.meta_batch_size)
+        #         self.metaval_total_accs2 = total_accs2 = [tf.reduce_sum(query_accs[j]) / tf.to_float(args.meta_batch_size) for j in range(num_updates)]
+        prefix = 'train_'
+        tf.summary.scalar(prefix + 'Pre-update loss', total_loss1)
+        if self.classification:
+            tf.summary.scalar(prefix + 'Pre-update accuracy', total_acc1)
+
+        for j in range(num_updates):
+            tf.summary.scalar(prefix + 'Post-update loss, step ' + str(j + 1), total_losses2[j])
+            if self.classification:
+                tf.summary.scalar(prefix + 'Post-update accuracy, step ' + str(j + 1), total_accs2[j])
+
+
+
+
+def main():
+    df = factor_history_csv()
+    asset_df = df[['mom', 'beme', 'gpa', 'kospi']]
+    macro_df = df[['mkt_rf', 'smb', 'hml', 'rmw', 'wml', 'call_rate', 'usdkrw']]
+
+    N = 20
+    envs_list = list(asset_df.index)
+    sampler = EnvSampler(envs_list, batch_size=32)
+
+    policy = MyPolicy()
+    baseline = MyBaseline()
+
+    metalearner = MetaLearner(sampler, policy, baseline, gamma=args.gamma, fast_lr=args.fast_lr, tau=args.tau)
+
+    sess = tf.InteractiveSession()
+
+
+    for i, date_ in enumerate(envs_list):
+        if i % 20 == 0:
+            base_d = date_
+            add_trajectory()
+
+        envs = sampler.sample_envs(base_d, N)
+        for env_t in envs:
+            support_data =
+
+
+
+
+
+
+
+
+
+
+
 
 
 
